@@ -231,6 +231,25 @@ body::before{
 .md th,.md td{padding:6px 8px;border:1px solid var(--line);text-align:left}
 .md th{background:var(--card-h);font-weight:700;color:var(--ink)}
 
+/* ── Bull's Thinking ── */
+.thinking-cards{display:flex;flex-direction:column;gap:8px}
+.think-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;border-left:3px solid var(--accent)}
+.think-card.action{border-left-color:var(--gold)}
+.think-card.passed{border-left-color:var(--bull)}
+.think-card.blocked{border-left-color:var(--bear)}
+.think-card.watch{border-left-color:var(--cyan)}
+.think-label{font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px}
+.think-label.lbl-action{color:var(--gold)}
+.think-label.lbl-passed{color:var(--bull)}
+.think-label.lbl-blocked{color:var(--bear)}
+.think-label.lbl-watch{color:var(--cyan)}
+.think-ticker{font-size:15px;font-weight:800;margin-bottom:2px}
+.think-reason{font-size:12px;color:var(--ink2);line-height:1.5}
+.think-signals{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.think-sig{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;background:var(--card-h);color:var(--ink2);border:1px solid var(--line)}
+.think-sig.on{background:var(--bull-bg);color:var(--bull);border-color:rgba(34,197,94,0.25)}
+.think-sig.off{background:var(--bear-bg);color:var(--bear);border-color:rgba(239,68,68,0.2)}
+
 .expandable summary{
   cursor:pointer;list-style:none;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;
   font-weight:700;color:var(--muted);padding:6px 0;user-select:none;
@@ -430,6 +449,12 @@ body::before{
   <div class="sec">
     <div class="sec-head"><div class="sec-title">Schedule</div><span style="font-size:11px;color:var(--muted)" id="etClock"></span></div>
     <div class="sched-grid" id="schedule"></div>
+  </div>
+
+  <!-- Bull's Thinking -->
+  <div class="sec">
+    <div class="sec-head"><div class="sec-title">Bull's Thinking</div><span class="sec-badge" id="thinkingDate">—</span></div>
+    <div id="thinking"><div class="skel w80"></div><div class="skel w60"></div></div>
   </div>
 
   <!-- Recent Trades -->
@@ -939,6 +964,90 @@ function kindFor(msg){
   return {k:"misc",label:"misc"};
 }
 
+function renderThinking(researchMd){
+  const el=document.getElementById("thinking");
+  const dateEl=document.getElementById("thinkingDate");
+  if(!researchMd||!researchMd.trim()){
+    el.innerHTML=`<div class="empty-state"><span class="emoji">🧠</span><div class="title">No decisions yet</div>Bull's reasoning will appear here after the first research run.</div>`;
+    return;
+  }
+
+  // Find latest entry date
+  const dateMatch=researchMd.match(/###\s*([\d-]+)/);
+  if(dateMatch) dateEl.textContent=dateMatch[1];
+
+  // Extract trade ideas / action items from latest entry
+  const cards=[];
+
+  // Parse "Draft Trade Ideas" or "Opportunities Found" sections
+  const ideaBlocks=[...researchMd.matchAll(/\d+\.\s*\*\*([A-Z]{1,5})\*\*\s*[—–-]\s*([\s\S]*?)(?=\n\d+\.\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+  for(const m of ideaBlocks){
+    const ticker=m[1];
+    const body=m[2].trim();
+
+    // Detect signal count
+    const sigMatch=body.match(/(\d)\s*(?:\/|of)\s*4/);
+    const sigCount=sigMatch?parseInt(sigMatch[1]):0;
+
+    // Detect if it was bought, blocked, or watching
+    const lower=body.toLowerCase();
+    let status='watch', label='Watching', lblCls='lbl-watch', cardCls='watch';
+    if(lower.includes('do not enter')||lower.includes('not entry-ready')||lower.includes('not tradeable')||lower.includes('not a buy')){
+      status='blocked'; label='Not Ready'; lblCls='lbl-blocked'; cardCls='blocked';
+    } else if(sigCount>=3 && !lower.includes('do not enter')){
+      status='passed'; label='Qualifies (3/4)'; lblCls='lbl-passed'; cardCls='passed';
+    }
+    if(lower.includes('bought')||lower.includes('placed')||lower.includes('executed')){
+      status='passed'; label='Traded'; lblCls='lbl-passed'; cardCls='passed';
+    }
+
+    // Extract signals present
+    const signals=[];
+    if(/fundamental/i.test(body)) signals.push({name:'Fundamental',on:/fundamental.*present|fundamental.*positive|fundamental.*\+|fundamental.*✓/i.test(body)||(/fundamental/i.test(body)&&!/fundamental.*not|fundamental.*missing|fundamental.*negative|fundamental.*needed/i.test(body))});
+    if(/technical/i.test(body)) signals.push({name:'Technical',on:/technical.*present|technical.*positive|technical.*✓/i.test(body)||(/technical/i.test(body)&&!/technical.*negative|technical.*broken|technical.*not|momentum.*broken/i.test(body))});
+    if(/smart.?money|institutional|insider/i.test(body)) signals.push({name:'Smart Money',on:/smart.?money.*present|institutional.*present|insider.*buying|insider.*confirmed|institutional.*confirmed/i.test(body)&&!/unconfirmed|not.*confirmed|not yet|needed|missing/i.test(body)});
+    if(/catalyst|sentiment/i.test(body)) signals.push({name:'Catalyst',on:/catalyst.*present|catalyst.*positive|catalyst.*✓/i.test(body)||(/catalyst/i.test(body)&&!/catalyst.*not|catalyst.*missing/i.test(body))});
+
+    // Clean up reason - take first sentence or action line
+    let reason=body.split('\n').find(l=>l.trim().startsWith('Action:'))||body.split('\n')[0]||'';
+    reason=reason.replace(/^Action:\s*/i,'').replace(/\*\*/g,'').trim();
+    if(reason.length>160) reason=reason.slice(0,157)+'...';
+
+    cards.push({ticker,status,label,lblCls,cardCls,reason,signals});
+  }
+
+  // Also extract action items as a summary
+  const actionMatch=researchMd.match(/\*\*Action Items[:\s]*\*\*([\s\S]*?)(?=\n---|\n###|$)/i);
+  let actionItems=[];
+  if(actionMatch){
+    actionItems=[...actionMatch[1].matchAll(/[-*]\s+(.*)/g)].map(m=>m[1].replace(/\*\*/g,'').trim()).filter(Boolean);
+  }
+
+  if(!cards.length && !actionItems.length){
+    el.innerHTML=`<div class="md-card"><div class="md">${marked.parse(researchMd.split('---').pop()||researchMd.slice(-800))}</div></div>`;
+    return;
+  }
+
+  let html='<div class="thinking-cards">';
+  for(const c of cards){
+    const sigHtml=c.signals.length?`<div class="think-signals">${c.signals.map(s=>`<span class="think-sig ${s.on?'on':'off'}">${s.on?'✓':'✗'} ${s.name}</span>`).join('')}</div>`:'';
+    html+=`<div class="think-card ${c.cardCls}">
+      <div class="think-label ${c.lblCls}">${c.label}</div>
+      <div class="think-ticker">${escHtml(c.ticker)}</div>
+      <div class="think-reason">${escHtml(c.reason)}</div>
+      ${sigHtml}
+    </div>`;
+  }
+  if(actionItems.length){
+    html+=`<div class="think-card action">
+      <div class="think-label lbl-action">Action Items</div>
+      ${actionItems.map(a=>`<div class="think-reason">• ${escHtml(a)}</div>`).join('')}
+    </div>`;
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
 function renderMdInto(el,md,path,maxLines){
   if(!md||!md.trim()){el.innerHTML=`<div class="empty-state">Nothing yet.</div>`;return;}
   let content=md;
@@ -994,6 +1103,7 @@ async function loadAll(userClick=false){
   renderHoldings(portfolio);
   renderStats(portfolio);
   renderAllocChart(portfolio);
+  renderThinking(researchMd);
   renderTrades(tradeMd);
   renderWatchlist(watchMd);
   renderMdInto(document.getElementById("research"), researchMd, "memory/research-log.md", 40);
@@ -1019,7 +1129,11 @@ function showDashboard(){
   setInterval(renderSchedule,30000);
   setInterval(checkForChanges,60000);
   setInterval(updateStatus,5000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkForChanges()});
+  // Mobile browsers kill timers when tab is backgrounded.
+  // Always do a full reload when user comes back.
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)loadAll(false)});
+  window.addEventListener("focus",()=>{if(Date.now()-lastLoadTime>30000)loadAll(false)});
+  window.addEventListener("pageshow",(e)=>{if(e.persisted)loadAll(false)});
 }
 
 async function saveToken(){
