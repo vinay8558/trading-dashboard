@@ -559,23 +559,50 @@ function parseMoney(s){
   return m ? parseFloat((m[1]+m[2]).replace(/,/g,"")) : 0;
 }
 
+// Try each pattern in order, return the first match's captured number.
+function firstMatch(text, patterns){
+  for(const p of patterns){
+    const m = text.match(p);
+    if(m) return parseFloat(m[1].replace(/,/g,""));
+  }
+  return null;
+}
+
 function parsePortfolio(md){
   const r = {equity:null, cash:null, dayPnl:null, positions:[], raw:md};
 
-  const eqPat = /(?:total\s*(?:portfolio\s*)?(?:value|equity)|portfolio\s*value|account\s*(?:value|equity)|equity)[:\s]*\$?\s*([\d,]+(?:\.\d+)?)/i;
-  const em = md.match(eqPat);
-  if(em) r.equity = parseFloat(em[1].replace(/,/g,""));
+  // "Total Equity:" is the standardized label Bull writes; the rest are fallbacks
+  // for older/looser phrasing so historical entries still parse.
+  // Note: Bull's markdown often bolds THROUGH the colon (e.g. "**Cash Available:**"),
+  // so the gap between label and value can contain stray "*" — [:\s*]* absorbs that.
+  r.equity = firstMatch(md, [
+    /\*\*Total Equity:?\*\*[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /current\s*value[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /total\s*(?:portfolio\s*)?(?:value|equity)[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /account\s*(?:value|equity)[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /portfolio\s*value[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /^\s*-?\s*\*\*equity\*\*[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/im,
+  ]);
 
-  const cm = md.match(/(?:cash|buying\s*power)[:\s]*\$?\s*([\d,]+(?:\.\d+)?)/i);
-  if(cm) r.cash = parseFloat(cm[1].replace(/,/g,""));
+  r.cash = firstMatch(md, [
+    /\*\*Cash:?\*\*[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /cash\s+(?:available|position|balance|on hand)[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /cash[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /buying\s*power[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+  ]);
 
-  const dm = md.match(/(?:day(?:'s)?\s*(?:p[&\/]?l|change|gain|loss))[:\s]*([-+]?\$?\s*[\d,]+(?:\.\d+)?)/i);
+  const dm = md.match(/(?:today'?s?\s*(?:p[&\/]?l|change|gain|loss)|day(?:'s)?\s*(?:p[&\/]?l|change|gain|loss))[:\s*]*([-+]?\$?\s*[\d,]+(?:\.\d+)?)/i);
   if(dm) r.dayPnl = parseMoney(dm[1]);
 
-  // Table parsing
+  // Table parsing — restricted to the "## Open Positions" section only, so other
+  // tables in the file (watchlist snapshots, sector exposure, etc.) never get
+  // mistaken for real holdings.
+  const posSectionMatch = md.match(/##\s*Open Positions([\s\S]*?)(?=\n##\s|\n---|\s*$)/i);
+  const posSection = posSectionMatch ? posSectionMatch[1] : md;
+
   const tableRe = /\|(.+)\|\s*\n\|[\s:|-]+\|\s*\n((?:\|.+\|\s*\n?)*)/g;
   let tm;
-  while((tm=tableRe.exec(md))!==null){
+  while((tm=tableRe.exec(posSection))!==null){
     const headers = tm[1].split("|").map(h=>h.trim().toLowerCase());
     const rows = tm[2].trim().split("\n");
     const tickerCol = headers.findIndex(h=>/ticker|symbol|stock/i.test(h));
@@ -600,9 +627,9 @@ function parsePortfolio(md){
     }
   }
 
-  // List format fallback
+  // List format fallback (also restricted to the Open Positions section)
   if(!r.positions.length){
-    const lm = [...md.matchAll(/[-*]\s*\*{0,2}([A-Z]{1,5})\*{0,2}[:\s]+(\d+)\s*shares?\s*@\s*\$?([\d,.]+)/gi)];
+    const lm = [...posSection.matchAll(/[-*]\s*\*{0,2}([A-Z]{1,5})\*{0,2}[:\s]+(\d+)\s*shares?\s*@\s*\$?([\d,.]+)/gi)];
     for(const m of lm){
       r.positions.push({ticker:m[1],shares:parseInt(m[2]),avgCost:parseFloat(m[3].replace(/,/g,"")),currentPrice:0,marketValue:0,pnl:0,pnlPct:0});
     }
@@ -618,18 +645,47 @@ function parsePortfolio(md){
 
 function extractEquity(md){
   const pats = [
-    /(?:total|equity|portfolio|account)\s*(?:value|equity)?[:\s]*\$?\s*([\d,]+(?:\.\d+)?)/i,
-    /\$\s*([\d,]+(?:\.\d+)?)/
+    /\*\*Total Equity:?\*\*[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /current\s*value[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:total|equity|portfolio|account)\s*(?:value|equity)?[:\s*]*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /\$\s*([\d,]+(?:\.\d+)?)/,
   ];
   for(const p of pats){
-    const m=md.match(p);
-    if(m){const v=parseFloat(m[1].replace(/,/g,""));if(v>1000)return v;}
+    const m = md.match(p);
+    if(m){ const v=parseFloat(m[1].replace(/,/g,"")); if(v>1000) return v; }
   }
   return null;
 }
 
 function parseTrades(md){
   const trades=[];
+
+  // Field-per-line block format — this is the format documented at the top of
+  // trade-log.md itself (**Action:** BUY / **Ticker:** NEE / **Shares:** 34 / ...),
+  // one block per "### " heading. Try this first since it's the canonical format.
+  const blocks = md.split(/\n(?=###\s)/);
+  for(const block of blocks){
+    const actionM = block.match(/\*\*Action:?\*\*\s*(BUY|SELL)\b/i);
+    if(!actionM) continue; // skips HOLD / no-trade entries
+    const tickerM = block.match(/\*\*Ticker:?\*\*\s*([A-Z]{1,5})/i);
+    if(!tickerM) continue;
+    const sharesM = block.match(/\*\*Shares:?\*\*\s*([\d,.]+)/i);
+    const priceM = block.match(/\*\*Price:?\*\*\s*\$?([\d,.]+)/i);
+    const valueM = block.match(/\*\*Total Value:?\*\*\s*\$?([\d,.]+)/i);
+    const headingM = block.match(/^###\s*(.+)/);
+    const dateM = block.match(/\*\*Date\/Time:?\*\*\s*([^\n]+)/i);
+    const shares = sharesM ? sharesM[1] : "";
+    const price = priceM ? priceM[1] : "";
+    trades.push({
+      action: actionM[1].toUpperCase(),
+      ticker: tickerM[1],
+      detail: shares && price ? `${shares} shares @ $${price}` : (shares ? `${shares} shares` : ""),
+      amount: valueM ? `$${valueM[1]}` : "",
+      date: dateM ? dateM[1].trim() : (headingM ? headingM[1].trim() : ""),
+    });
+  }
+  if(trades.length) return trades;
+
   // Table format
   const tm=[...md.matchAll(/\|\s*(BUY|SELL|buy|sell)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|?/gi)];
   for(const m of tm){
@@ -1003,15 +1059,52 @@ function renderThinking(researchMd){
     return;
   }
 
-  // Find latest entry date
-  const dateMatch=researchMd.match(/###\s*([\d-]+)/);
+  // Routines prepend new entries at the top of research-log.md, so the first
+  // "### " heading is the latest entry. Scope everything below to just that
+  // entry — otherwise numbered lists from older days (and "Plan for tomorrow"
+  // items) get mixed in as if they were today's decisions.
+  const entries = researchMd.split(/\n(?=###\s)/).filter(b=>/^###\s/.test(b.trim()));
+  const latestEntry = entries.length ? entries[0] : researchMd;
+
+  const dateMatch=latestEntry.match(/###\s*([\d-]+)/);
   if(dateMatch) dateEl.textContent=dateMatch[1];
 
-  // Extract trade ideas / action items from latest entry
+  // Extract trade ideas / action items from latest entry only
   const cards=[];
 
-  // Parse "Draft Trade Ideas" or "Opportunities Found" sections
-  const ideaBlocks=[...researchMd.matchAll(/\d+\.\s*\*\*([A-Z]{1,5})\*\*\s*[—–-]\s*([\s\S]*?)(?=\n\d+\.\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+  // Preferred path: the standardized "**Today's Verdict:**" list
+  // (format: "N. **TICKER** — ENTERED|BLOCKED|WATCHING|SOLD — reason").
+  // This is unambiguous, unlike guessing from free-form prose below.
+  const verdictMatch = latestEntry.match(/\*\*Today'?s?\s*Verdict:?\*\*([\s\S]*?)(?=\n\*\*[A-Z][a-z]|\n---|\n###|$)/i);
+  const verdictItems = verdictMatch
+    ? [...verdictMatch[1].matchAll(/\d+\.\s*\*\*([A-Z]{1,5})\*\*\s*[—–-]\s*(ENTERED|BLOCKED|WATCHING|SOLD)\s*[—–-]\s*(.+)/gi)]
+    : [];
+
+  const STATUS_MAP = {
+    ENTERED:  {label:'Traded',        lblCls:'lbl-passed', cardCls:'passed'},
+    SOLD:     {label:'Traded',        lblCls:'lbl-passed', cardCls:'passed'},
+    BLOCKED:  {label:'Not Ready',     lblCls:'lbl-blocked',cardCls:'blocked'},
+    WATCHING: {label:'Watching',      lblCls:'lbl-watch',  cardCls:'watch'},
+  };
+
+  if(verdictItems.length){
+    for(const m of verdictItems){
+      const s = STATUS_MAP[m[2].toUpperCase()] || STATUS_MAP.WATCHING;
+      let reason = m[3].trim();
+      if(reason.length>160) reason = reason.slice(0,157)+'...';
+      cards.push({ticker:m[1], label:s.label, lblCls:s.lblCls, cardCls:s.cardCls, reason, signals:[]});
+    }
+  }
+
+  // Fallback for entries written before the Today's Verdict format existed:
+  // guess status/signals from free-form prose numbered lists.
+  let ideaBlocks = verdictItems.length ? [] : [...latestEntry.matchAll(/\d+\.\s*\*\*([A-Z]{1,5})(?:\s*\/\s*[A-Z]{1,5})*\*\*\s*[—–-]\s*([\s\S]*?)(?=\n\d+\.\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+
+  if(!verdictItems.length && !ideaBlocks.length){
+    // Further fallback: bulleted "Opportunities Found" format, e.g. "- **NEE (NextEra Energy):** ..."
+    ideaBlocks=[...latestEntry.matchAll(/[-*]\s*\*\*([A-Z]{1,5})(?:\s*\([^)]*\))?:?\*\*\s*[—–-]?\s*([\s\S]*?)(?=\n[-*]\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+  }
+
   for(const m of ideaBlocks){
     const ticker=m[1];
     const body=m[2].trim();
@@ -1047,15 +1140,15 @@ function renderThinking(researchMd){
     cards.push({ticker,status,label,lblCls,cardCls,reason,signals});
   }
 
-  // Also extract action items as a summary
-  const actionMatch=researchMd.match(/\*\*Action Items[:\s]*\*\*([\s\S]*?)(?=\n---|\n###|$)/i);
+  // Also extract action items as a summary (latest entry only)
+  const actionMatch=latestEntry.match(/\*\*Action Items[:\s]*\*\*([\s\S]*?)(?=\n---|\n###|$)/i);
   let actionItems=[];
   if(actionMatch){
     actionItems=[...actionMatch[1].matchAll(/[-*]\s+(.*)/g)].map(m=>m[1].replace(/\*\*/g,'').trim()).filter(Boolean);
   }
 
   if(!cards.length && !actionItems.length){
-    el.innerHTML=`<div class="md-card"><div class="md">${marked.parse(researchMd.split('---').pop()||researchMd.slice(-800))}</div></div>`;
+    el.innerHTML=`<div class="md-card"><div class="md">${marked.parse(latestEntry.slice(0,1200))}</div></div>`;
     return;
   }
 
