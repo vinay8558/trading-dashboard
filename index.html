@@ -183,6 +183,10 @@ body::before{
 }
 .trade-action.buy{background:var(--bull-bg);color:var(--bull)}
 .trade-action.sell{background:var(--bear-bg);color:var(--bear)}
+.trade-manual-tag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;padding:2px 6px;border-radius:99px;background:var(--accent-bg);color:var(--accent);border:1px solid rgba(139,92,246,.28);margin-left:6px;vertical-align:2px}
+.trades-section-head{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 4px 4px;display:flex;align-items:center;gap:6px}
+.trades-section-head.manual{color:var(--accent)}
+.trades-section-head .sh-count{background:var(--card-h);color:var(--ink2);font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700}
 .trade-ticker{font-weight:700;font-size:14px}
 .trade-detail{font-size:12px;color:var(--muted)}
 .trade-amount{font-size:13px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
@@ -295,6 +299,21 @@ body::before{
   padding:10px 14px;border-radius:12px;font-size:13px;font-weight:500;margin-bottom:14px;
 }
 
+/* ── Needs Your Review ── */
+.review-item{background:var(--card);border:1px solid rgba(234,179,8,0.35);border-radius:14px;padding:14px;margin-bottom:10px}
+.review-title{font-weight:700;font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.review-meta{font-size:11px;color:var(--muted);margin-bottom:12px}
+.review-actions{display:flex;gap:8px}
+.btn-merge{
+  flex:1;background:linear-gradient(135deg,#22c55e,#06b6d4);color:#04110a;font-weight:800;
+  border:0;padding:10px;border-radius:10px;font-size:13px;cursor:pointer;
+}
+.btn-merge:disabled{opacity:.5;cursor:wait}
+.btn-view{
+  padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card-h);
+  color:var(--ink);text-decoration:none;font-size:13px;font-weight:600;display:grid;place-items:center;
+}
+
 /* ── Setup Screen ── */
 .setup-wrap{max-width:520px;margin:0 auto;padding:40px 18px 60px}
 .setup-hero{text-align:center;margin-bottom:28px}
@@ -351,9 +370,10 @@ body::before{
       <p>Repository access: "Only select repositories" → <code>trading-agent</code></p>
     </div>
     <div class="step">
-      <h3>Add read-only permission</h3>
+      <h3>Add permissions</h3>
       <p>Click <strong>"+ Add permissions"</strong> under Repositories tab</p>
-      <p>Find <strong>Contents</strong> → set to <strong>Read-only</strong></p>
+      <p>Find <strong>Contents</strong> → set to <strong>Read and write</strong></p>
+      <p>Find <strong>Pull requests</strong> → set to <strong>Read and write</strong> (needed for the one-click merge button)</p>
       <p>Metadata (Read-only) is auto-added. Leave everything else as "No access".</p>
     </div>
     <div class="step">
@@ -374,6 +394,7 @@ body::before{
     <div id="testResult" class="test-result"></div>
   </div>
   <p class="setup-note">Token stays on your device — never sent to any server except GitHub's API.</p>
+  <p class="setup-note">Already connected before? Your old token was Contents: Read-only, which can't merge PRs. Regenerate it with Contents + Pull requests set to Read and write, then reconnect here.</p>
 </div>
 
 <!-- ── Dashboard ── -->
@@ -395,6 +416,12 @@ body::before{
   </div>
 
   <div id="errorBox"></div>
+
+  <!-- Needs Your Review -->
+  <div class="sec" id="reviewSection" style="display:none">
+    <div class="sec-head"><div class="sec-title">Needs Your Review <span class="sec-badge" id="reviewCount">0</span></div></div>
+    <div id="reviewList"></div>
+  </div>
 
   <!-- Portfolio Hero -->
   <div class="hero-section">
@@ -551,6 +578,76 @@ async function fetchFile(path){
   const d=await ghGet(`/contents/${path}`);
   return d.encoding==="base64" ? atob(d.content.replace(/\n/g,"")) : (d.content||"");
 }
+async function ghGraphQL(query,variables){
+  const r=await fetch("https://api.github.com/graphql",{
+    method:"POST",headers:{...authHeaders(),"Content-Type":"application/json"},
+    body:JSON.stringify({query,variables})
+  });
+  const d=await r.json();
+  if(!r.ok||d.errors) throw new Error((d.errors&&d.errors[0].message)||`GraphQL error ${r.status}`);
+  return d.data;
+}
+
+/* ── Needs Your Review (open routine PRs) ── */
+let openPRsCache={};
+async function fetchOpenPRs(){
+  try{ return await ghGet("/pulls?state=open&base=main&per_page=20"); }
+  catch{ return []; }
+}
+function prKind(pr){
+  const t=(pr.title+" "+(pr.body||"")).toLowerCase();
+  if(/\bbug\b|\berror\b/.test(t)) return {label:"BUG",cls:"close"};
+  if(/\bsold\b|\bsell\b/.test(t)) return {label:"SELL",cls:"close"};
+  if(/\bbought\b|\bbuy\b/.test(t)) return {label:"BUY",cls:"open"};
+  return {label:"REVIEW",cls:"week"};
+}
+async function renderReviewPRs(){
+  const sec=document.getElementById("reviewSection");
+  const list=document.getElementById("reviewList");
+  const prs=await fetchOpenPRs();
+  openPRsCache={};
+  prs.forEach(pr=>openPRsCache[pr.number]=pr);
+  document.getElementById("reviewCount").textContent=prs.length;
+  if(!prs.length){ sec.style.display="none"; return; }
+  sec.style.display="block";
+  list.innerHTML=prs.map(pr=>{
+    const k=prKind(pr);
+    return `<div class="review-item">
+      <div class="review-title"><span class="abadge ab-${k.cls}">${k.label}</span>${escHtml(pr.title)}</div>
+      <div class="review-meta">#${pr.number} · opened ${timeAgo(pr.created_at)}</div>
+      <div class="review-actions">
+        <button class="btn-merge" id="mergeBtn-${pr.number}" onclick="mergePR(${pr.number})">Merge to main</button>
+        <a class="btn-view" href="${pr.html_url}" target="_blank">View</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+async function mergePR(number){
+  const btn=document.getElementById(`mergeBtn-${number}`);
+  const pr=openPRsCache[number];
+  btn.disabled=true; btn.textContent="Merging...";
+  try{
+    if(pr && pr.draft){
+      await ghGraphQL(
+        `mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id}}}`,
+        {id:pr.node_id}
+      );
+    }
+    const r=await fetch(`${API}/pulls/${number}/merge`,{
+      method:"PUT",
+      headers:{...authHeaders(),"Content-Type":"application/json"},
+      body:JSON.stringify({merge_method:"merge"})
+    });
+    if(!r.ok){
+      const e=await r.json().catch(()=>({}));
+      throw new Error(e.message||`Merge failed (${r.status})`);
+    }
+    await loadAll(false);
+  }catch(e){
+    btn.disabled=false; btn.textContent="Merge to main";
+    alert(`Couldn't merge PR #${number}: ${e.message}\n\nIf this says "not accessible", your token needs Pull requests: Read & write and Contents: Read & write.`);
+  }
+}
 
 /* ── Parsing ── */
 function parseMoney(s){
@@ -674,6 +771,7 @@ function parseTrades(md){
     const valueM = block.match(/\*\*Total Value:?\*\*\s*\$?([\d,.]+)/i);
     const headingM = block.match(/^###\s*(.+)/);
     const dateM = block.match(/\*\*Date\/Time:?\*\*\s*([^\n]+)/i);
+    const typeM = block.match(/\*\*Type:?\*\*\s*(MANUAL|AUTO)\b/i);
     const shares = sharesM ? sharesM[1] : "";
     const price = priceM ? priceM[1] : "";
     trades.push({
@@ -682,6 +780,7 @@ function parseTrades(md){
       detail: shares && price ? `${shares} shares @ $${price}` : (shares ? `${shares} shares` : ""),
       amount: valueM ? `$${valueM[1]}` : "",
       date: dateM ? dateM[1].trim() : (headingM ? headingM[1].trim() : ""),
+      isManual: typeM ? typeM[1].toUpperCase() === "MANUAL" : false,
     });
   }
   if(trades.length) return trades;
@@ -1000,11 +1099,23 @@ function renderTrades(md){
     }
     return;
   }
-  el.innerHTML=`<div class="trades-list">${trades.slice(0,10).map(t=>`<div class="trade-row">
+  const rowHtml = t => `<div class="trade-row">
     <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
-    <div><div class="trade-ticker">${escHtml(t.ticker)}</div><div class="trade-detail">${escHtml(t.detail)}</div></div>
+    <div><div class="trade-ticker">${escHtml(t.ticker)}${t.isManual?'<span class="trade-manual-tag">MANUAL</span>':''}</div><div class="trade-detail">${escHtml(t.detail)}</div></div>
     <div class="trade-amount">${escHtml(t.amount||"")}<br><span style="font-size:11px;color:var(--muted)">${escHtml(t.date)}</span></div>
-  </div>`).join("")}</div>`;
+  </div>`;
+  const autoTrades = trades.filter(t=>!t.isManual).slice(0,10);
+  const manualTrades = trades.filter(t=>t.isManual).slice(0,15);
+  let html = "";
+  if(autoTrades.length){
+    html += `<div class="trades-section-head">Bull's Trades <span class="sh-count">${autoTrades.length}</span></div>`;
+    html += `<div class="trades-list">${autoTrades.map(rowHtml).join("")}</div>`;
+  }
+  if(manualTrades.length){
+    html += `<div class="trades-section-head manual">Manual Overrides <span class="sh-count">${manualTrades.length}</span> <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">— speculative side-bets, Bull may add/sell on insider or Congress signals</span></div>`;
+    html += `<div class="trades-list">${manualTrades.map(rowHtml).join("")}</div>`;
+  }
+  el.innerHTML = html;
 }
 
 function renderWatchlist(md){
@@ -1210,6 +1321,7 @@ async function loadAll(userClick=false){
   }
   document.getElementById("errorBox").innerHTML="";
   renderSchedule();
+  renderReviewPRs();
 
   const [portfolioMd, tradeMd, watchMd, researchMd, learningsMd] = await Promise.all([
     fetchFile("memory/portfolio-state.md").catch(()=>""),
@@ -1286,7 +1398,7 @@ async function saveToken(){
     setTimeout(showDashboard,600);
   }catch(e){
     clearToken();result.className="test-result bad";
-    result.textContent=`Failed: ${e.message}. Check token has Contents: Read-only on trading-agent.`;
+    result.textContent=`Failed: ${e.message}. Check token has Contents: Read & write and Pull requests: Read & write on trading-agent.`;
     btn.disabled=false;btn.textContent="Connect Dashboard";
   }
 }
