@@ -118,9 +118,9 @@ body::before{
 .holdings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .holding{
   background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;
-  position:relative;overflow:hidden;transition:background .2s;cursor:default;
+  position:relative;overflow:hidden;transition:background .2s;cursor:pointer;
 }
-.holding:hover{background:var(--card-h)}
+.holding:hover,.holding:active{background:var(--card-h)}
 .holding-bar{position:absolute;top:0;left:0;right:0;height:3px;border-radius:14px 14px 0 0}
 .holding-bar.up{background:var(--bull)}.holding-bar.down{background:var(--bear)}
 .holding-ticker{font-size:15px;font-weight:800;letter-spacing:-0.01em}
@@ -772,6 +772,7 @@ function parsePortfolio(md){
     const priceCol = headers.findIndex(h=>/current|price|last|market/i.test(h));
     const valueCol = headers.findIndex(h=>/value|market.*val/i.test(h));
     const pnlCol = headers.findIndex(h=>/p[&\/]?l|gain|loss|return|change/i.test(h));
+    const thesisCol = headers.findIndex(h=>/thesis|reason|note/i.test(h));
     for(const row of rows){
       const cells = row.split("|").map(c=>c.trim()).filter(Boolean);
       const ticker = cells[tickerCol>=0?tickerCol:0]?.replace(/\*+/g,"").trim();
@@ -784,7 +785,8 @@ function parsePortfolio(md){
       const pnl = parseMoney(pnlStr);
       const pctM = pnlStr.match(/([-+]?[\d.]+)\s*%/);
       const pnlPct = pctM ? parseFloat(pctM[1]) : (avgCost ? ((curPrice-avgCost)/avgCost*100) : 0);
-      r.positions.push({ticker,shares,avgCost,currentPrice:curPrice,marketValue:mktVal,pnl,pnlPct});
+      const thesis = thesisCol>=0 ? (cells[thesisCol]||"").replace(/\*+/g,"").trim() : "";
+      r.positions.push({ticker,shares,avgCost,currentPrice:curPrice,marketValue:mktVal,pnl,pnlPct,thesis});
     }
   }
 
@@ -792,7 +794,7 @@ function parsePortfolio(md){
   if(!r.positions.length){
     const lm = [...posSection.matchAll(/[-*]\s*\*{0,2}([A-Z]{1,5})\*{0,2}[:\s]+(\d+)\s*shares?\s*@\s*\$?([\d,.]+)/gi)];
     for(const m of lm){
-      r.positions.push({ticker:m[1],shares:parseInt(m[2]),avgCost:parseFloat(m[3].replace(/,/g,"")),currentPrice:0,marketValue:0,pnl:0,pnlPct:0});
+      r.positions.push({ticker:m[1],shares:parseInt(m[2]),avgCost:parseFloat(m[3].replace(/,/g,"")),currentPrice:0,marketValue:0,pnl:0,pnlPct:0,thesis:""});
     }
   }
 
@@ -1082,13 +1084,14 @@ async function buildHistory(){
 function renderHoldings(portfolio){
   const el=document.getElementById("holdings");
   document.getElementById("holdCount").textContent=portfolio.positions.length;
+  window.__holdingsCache = portfolio.positions;
   if(!portfolio.positions.length){
     el.innerHTML=`<div class="empty-state"><span class="emoji">📋</span><div class="title">No open positions</div>Bull is researching. Trades appear after market open.</div>`;
     return;
   }
-  el.innerHTML=`<div class="holdings-grid">${portfolio.positions.map(p=>{
+  el.innerHTML=`<div class="holdings-grid">${portfolio.positions.map((p,i)=>{
     const up=p.pnl>=0;
-    return `<div class="holding">
+    return `<div class="holding" onclick="showHoldingModal(${i})">
       <div class="holding-bar ${up?"up":"down"}"></div>
       <div class="holding-ticker">${escHtml(p.ticker)}</div>
       <div class="holding-shares">${p.shares} share${p.shares!==1?"s":""}</div>
@@ -1096,6 +1099,25 @@ function renderHoldings(portfolio){
       <div class="holding-pnl ${up?"up":"down"}">${fmtSign(p.pnl)} (${fmtPct(p.pnlPct)})</div>
     </div>`;
   }).join("")}</div>`;
+}
+
+function showHoldingModal(idx){
+  const p = (window.__holdingsCache||[])[idx];
+  if(!p) return;
+  const $ = id => document.getElementById(id);
+  const up = p.pnl>=0;
+  $("mAction").textContent = "HOLDING";
+  $("mAction").className = "trade-action " + (up?"buy":"sell");
+  $("mTicker").textContent = p.ticker;
+  $("mManualTag").innerHTML = "";
+  $("mDetail").textContent = `${p.shares} shares @ avg $${(p.avgCost||0).toFixed(2)} · now $${(p.currentPrice||0).toFixed(2)} · ${fmtSign(p.pnl)} (${fmtPct(p.pnlPct)})`;
+  $("mThesis").textContent = p.thesis || "No thesis captured in portfolio-state.md for this position yet.";
+  $("mSignalsSection").style.display = "none";
+  $("mStopSection").style.display = "none";
+  $("mTargetSection").style.display = "none";
+  $("mDateSection").style.display = "none";
+  $("tradeModal").classList.add("open");
+  document.body.style.overflow = "hidden";
 }
 
 function renderStats(portfolio){
