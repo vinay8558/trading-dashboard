@@ -183,7 +183,38 @@ body::before{
 }
 .trade-action.buy{background:var(--bull-bg);color:var(--bull)}
 .trade-action.sell{background:var(--bear-bg);color:var(--bear)}
+.trade-row{cursor:pointer;transition:background .15s}
+.trade-row:hover,.trade-row:active{background:var(--card-h)}
 .trade-manual-tag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;padding:2px 6px;border-radius:99px;background:var(--accent-bg);color:var(--accent);border:1px solid rgba(139,92,246,.28);margin-left:6px;vertical-align:2px}
+.trade-row .chev{color:var(--muted);font-size:14px;margin-left:6px;opacity:.5;transition:opacity .15s}
+.trade-row:hover .chev{opacity:1}
+
+/* Trade thesis modal */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(6px);z-index:100;display:none;align-items:flex-end;justify-content:center;padding:16px;animation:fadeIn .18s ease-out}
+.modal-backdrop.open{display:flex}
+@media(min-width:640px){.modal-backdrop{align-items:center}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal-card{
+  background:var(--bg);border:1px solid var(--line);border-radius:20px 20px 0 0;
+  max-width:520px;width:100%;max-height:85vh;overflow-y:auto;
+  padding:20px 20px 24px;position:relative;
+  box-shadow:0 -8px 40px rgba(0,0,0,.5);
+  animation:slideUp .22s cubic-bezier(.2,.9,.3,1);
+}
+@media(min-width:640px){.modal-card{border-radius:20px;animation:zoomIn .18s ease-out}}
+@keyframes slideUp{from{transform:translateY(30%)}to{transform:translateY(0)}}
+@keyframes zoomIn{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-close{position:absolute;top:12px;right:12px;background:var(--card);border:1px solid var(--line);color:var(--ink);width:32px;height:32px;border-radius:10px;font-size:16px;cursor:pointer;display:grid;place-items:center;transition:background .15s}
+.modal-close:hover{background:var(--card-h)}
+.modal-head{display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap}
+.modal-head .trade-action{font-size:11px;padding:3px 10px}
+.modal-ticker{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.modal-detail{font-size:13px;color:var(--muted);margin-bottom:16px}
+.modal-section{margin-top:14px}
+.modal-section-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.modal-section-body{font-size:14px;line-height:1.55;color:var(--ink)}
+.modal-signals{display:flex;gap:5px;flex-wrap:wrap;margin-top:2px}
+.modal-signal-chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--card-h);color:var(--ink2);border:1px solid var(--line)}
 .trades-section-head{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 4px 4px;display:flex;align-items:center;gap:6px}
 .trades-section-head.manual{color:var(--accent)}
 .trades-section-head .sh-count{background:var(--card-h);color:var(--ink2);font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700}
@@ -527,6 +558,39 @@ body::before{
   </div>
 </div>
 
+<!-- Trade Thesis Modal (click any trade row to open) -->
+<div id="tradeModal" class="modal-backdrop" onclick="if(event.target===this)closeTradeModal()">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeTradeModal()" aria-label="Close">✕</button>
+    <div class="modal-head">
+      <span id="mAction" class="trade-action">BUY</span>
+      <span id="mTicker" class="modal-ticker">—</span>
+      <span id="mManualTag"></span>
+    </div>
+    <div id="mDetail" class="modal-detail">—</div>
+    <div class="modal-section">
+      <div class="modal-section-label">Why bought — thesis</div>
+      <div id="mThesis" class="modal-section-body">—</div>
+    </div>
+    <div class="modal-section" id="mSignalsSection" style="display:none">
+      <div class="modal-section-label">Signals</div>
+      <div id="mSignals" class="modal-signals"></div>
+    </div>
+    <div class="modal-section" id="mStopSection" style="display:none">
+      <div class="modal-section-label">Stop-loss</div>
+      <div id="mStopLoss" class="modal-section-body">—</div>
+    </div>
+    <div class="modal-section" id="mTargetSection" style="display:none">
+      <div class="modal-section-label">Target</div>
+      <div id="mTarget" class="modal-section-body">—</div>
+    </div>
+    <div class="modal-section" id="mDateSection" style="display:none">
+      <div class="modal-section-label">When</div>
+      <div id="mDate" class="modal-section-body">—</div>
+    </div>
+  </div>
+</div>
+
 <script>
 const REPO = "vinay8558/trading-agent";
 const API = `https://api.github.com/repos/${REPO}`;
@@ -772,6 +836,12 @@ function parseTrades(md){
     const headingM = block.match(/^###\s*(.+)/);
     const dateM = block.match(/\*\*Date\/Time:?\*\*\s*([^\n]+)/i);
     const typeM = block.match(/\*\*Type:?\*\*\s*(MANUAL|AUTO)\b/i);
+    // Extract free-form fields; each stops at the next **Field:** or end-of-block.
+    const grabField = (label) => {
+      const re = new RegExp(`\\*\\*${label}:?\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*[A-Z][^*]*:?\\*\\*|\\n###|$)`, 'i');
+      const m = block.match(re);
+      return m ? m[1].trim().replace(/\s+/g, ' ') : "";
+    };
     const shares = sharesM ? sharesM[1] : "";
     const price = priceM ? priceM[1] : "";
     trades.push({
@@ -781,6 +851,10 @@ function parseTrades(md){
       amount: valueM ? `$${valueM[1]}` : "",
       date: dateM ? dateM[1].trim() : (headingM ? headingM[1].trim() : ""),
       isManual: typeM ? typeM[1].toUpperCase() === "MANUAL" : false,
+      thesis: grabField("Thesis"),
+      signals: grabField("Signals"),
+      stopLoss: grabField("Stop-Loss"),
+      target: grabField("Target"),
     });
   }
   if(trades.length) return trades;
@@ -1099,11 +1173,16 @@ function renderTrades(md){
     }
     return;
   }
-  const rowHtml = t => `<div class="trade-row">
-    <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
-    <div><div class="trade-ticker">${escHtml(t.ticker)}${t.isManual?'<span class="trade-manual-tag">MANUAL</span>':''}</div><div class="trade-detail">${escHtml(t.detail)}</div></div>
-    <div class="trade-amount">${escHtml(t.amount||"")}<br><span style="font-size:11px;color:var(--muted)">${escHtml(t.date)}</span></div>
-  </div>`;
+  // Stash trades globally so the modal can look them up by index without re-parsing.
+  window.__tradesCache = trades;
+  const rowHtml = t => {
+    const i = trades.indexOf(t);
+    return `<div class="trade-row" onclick="showTradeModal(${i})">
+      <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
+      <div><div class="trade-ticker">${escHtml(t.ticker)}${t.isManual?'<span class="trade-manual-tag">MANUAL</span>':''}</div><div class="trade-detail">${escHtml(t.detail)}</div></div>
+      <div class="trade-amount">${escHtml(t.amount||"")}<br><span style="font-size:11px;color:var(--muted)">${escHtml(t.date)}</span><span class="chev">›</span></div>
+    </div>`;
+  };
   const autoTrades = trades.filter(t=>!t.isManual).slice(0,10);
   const manualTrades = trades.filter(t=>t.isManual).slice(0,15);
   let html = "";
@@ -1117,6 +1196,40 @@ function renderTrades(md){
   }
   el.innerHTML = html;
 }
+
+function showTradeModal(idx){
+  const t = (window.__tradesCache||[])[idx];
+  if(!t) return;
+  const $ = id => document.getElementById(id);
+  $("mAction").textContent = t.action;
+  $("mAction").className = "trade-action " + t.action.toLowerCase();
+  $("mTicker").textContent = t.ticker;
+  $("mManualTag").innerHTML = t.isManual ? '<span class="trade-manual-tag">MANUAL</span>' : "";
+  $("mDetail").textContent = [t.detail, t.amount].filter(Boolean).join(" · ") || "—";
+  $("mThesis").textContent = t.thesis || (t.isManual ? "Owner-directed manual override, speculative side-bet — no formal thesis." : "No thesis captured in the trade log.");
+  // Signals as chips
+  if(t.signals){
+    $("mSignalsSection").style.display = "";
+    $("mSignals").innerHTML = t.signals.split(/[,;·]/).map(s=>s.trim()).filter(Boolean).map(s=>`<span class="modal-signal-chip">${escHtml(s)}</span>`).join("");
+  } else {
+    $("mSignalsSection").style.display = "none";
+  }
+  // Optional fields
+  const toggle = (secId, valId, val) => {
+    if(val){ $(secId).style.display = ""; $(valId).textContent = val; }
+    else $(secId).style.display = "none";
+  };
+  toggle("mStopSection", "mStopLoss", t.stopLoss);
+  toggle("mTargetSection", "mTarget", t.target);
+  toggle("mDateSection", "mDate", t.date);
+  $("tradeModal").classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+function closeTradeModal(){
+  document.getElementById("tradeModal").classList.remove("open");
+  document.body.style.overflow = "";
+}
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeTradeModal(); });
 
 function renderWatchlist(md){
   const el=document.getElementById("watchlist");
