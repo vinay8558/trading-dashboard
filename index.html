@@ -217,6 +217,26 @@ body::before{
 .modal-signal-chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--card-h);color:var(--ink2);border:1px solid var(--line)}
 .trades-section-head{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 4px 4px;display:flex;align-items:center;gap:6px}
 .trades-section-head.manual{color:var(--accent)}
+
+/* About modal */
+.about-tagline{font-size:14px;color:var(--ink2);line-height:1.6;margin:2px 0 18px}
+.about-stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:20px}
+.about-stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center}
+.about-stat .v{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums}
+.about-stat .v.up{color:var(--bull)}.about-stat .v.down{color:var(--bear)}
+.about-stat .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+.about-h{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:20px 0 8px}
+.about-h:first-of-type{margin-top:0}
+.about-list{margin:0;padding-left:18px;font-size:13.5px;line-height:1.65;color:var(--ink2)}
+.about-list li{margin:3px 0}
+.about-list b, .about-p b{color:var(--ink)}
+.about-p{font-size:13.5px;line-height:1.65;color:var(--ink2);margin:0 0 4px}
+.about-routine-grid{display:grid;grid-template-columns:1fr;gap:6px;margin-top:6px}
+.about-routine{display:flex;align-items:baseline;gap:8px;font-size:13px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.about-routine b{color:var(--ink);min-width:110px}
+.about-routine span{color:var(--muted);font-size:12px}
+.about-stack{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.about-footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);text-align:center}
 .trades-section-head .sh-count{background:var(--card-h);color:var(--ink2);font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700}
 .trade-ticker{font-weight:700;font-size:14px}
 .trade-detail{font-size:12px;color:var(--muted)}
@@ -303,13 +323,13 @@ body::before{
 }
 
 /* ── Footer ── */
-.footer{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:24px}
-.footer a{
+.footer{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:24px}
+.footer a, .footer button{
   display:grid;place-items:center;gap:4px;padding:14px 8px;background:var(--card);
   border:1px solid var(--line);color:var(--ink);text-decoration:none;border-radius:14px;
-  font-size:12px;font-weight:600;transition:background .2s;
+  font-size:12px;font-weight:600;transition:background .2s;cursor:pointer;font-family:inherit;
 }
-.footer a:active{background:var(--card-h)}
+.footer a:active, .footer button:active{background:var(--card-h)}
 .footer .fico{font-size:18px}
 
 /* ── Empty & Loading States ── */
@@ -555,6 +575,7 @@ body::before{
     <a href="https://app.alpaca.markets" target="_blank"><span class="fico">📊</span>Alpaca</a>
     <a href="https://github.com/vinay8558/trading-agent" target="_blank"><span class="fico">📁</span>Repo</a>
     <a href="https://github.com/vinay8558/trading-agent/pulls" target="_blank"><span class="fico">🔀</span>PRs</a>
+    <button type="button" onclick="openAbout()"><span class="fico">ℹ️</span>About</button>
   </div>
 </div>
 
@@ -591,6 +612,71 @@ body::before{
   </div>
 </div>
 
+<!-- About Modal -->
+<div id="aboutModal" class="modal-backdrop" onclick="if(event.target===this)closeAbout()">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeAbout()" aria-label="Close">✕</button>
+    <div class="modal-head">
+      <span style="font-size:22px">🐂</span>
+      <span class="modal-ticker">Bull</span>
+    </div>
+    <p class="about-tagline">An autonomous AI trading agent that researches, decides, executes, and manages risk on a live paper-trading account around the clock — with no human in the loop for day-to-day decisions, and a full git-based audit trail of every call it's made.</p>
+
+    <div class="about-stat-grid" id="aboutStats">
+      <div class="about-stat"><div class="v" id="aStatEquity">—</div><div class="l">Equity</div></div>
+      <div class="about-stat"><div class="v" id="aStatReturn">—</div><div class="l">Return since 7/5</div></div>
+      <div class="about-stat"><div class="v" id="aStatPositions">—</div><div class="l">Open Positions</div></div>
+      <div class="about-stat"><div class="v" id="aStatTrades">—</div><div class="l">Trades Logged</div></div>
+    </div>
+
+    <div class="about-h">Mission</div>
+    <p class="about-p">Beat the S&P 500 through disciplined, fundamentals-driven swing trading — capital preservation first, growth second. Not a day trader: every position is backed by a documented, multi-signal thesis, sized deliberately, and protected by a trailing stop from the moment it opens.</p>
+
+    <div class="about-h">How It Operates</div>
+    <p class="about-p">Five scheduled routines run Bull's trading day end-to-end, each waking up independently, reading only the state it needs, and writing its reasoning back to a permanent record before handing off to the next:</p>
+    <div class="about-routine-grid" id="aboutRoutines"></div>
+
+    <div class="about-h">Decision Framework</div>
+    <ul class="about-list">
+      <li><b>Fundamental</b> — earnings quality, growth trajectory, balance-sheet strength</li>
+      <li><b>Technical</b> — trend/momentum confirmation, not chasing extended moves</li>
+      <li><b>Smart Money</b> — insider buying (SEC Form 4) and institutional accumulation (13F)</li>
+      <li><b>Catalyst</b> — a live, specific reason the market should re-rate the stock now</li>
+    </ul>
+    <p class="about-p">3 of 4 signals is the entry bar — Bull doesn't wait indefinitely for a perfect 4/4 read. A missing signal reduces position size rather than blocking the trade outright.</p>
+
+    <div class="about-h">Risk Guardrails</div>
+    <ul class="about-list">
+      <li>Max 5% of portfolio in any single position, max 10 open positions at once</li>
+      <li>Max 3 new positions per week — patience is enforced, not optional</li>
+      <li>Every position gets an 8% trailing stop the moment it's opened, no exceptions</li>
+      <li>15% minimum cash floor; 2% daily portfolio-loss circuit breaker</li>
+      <li>Sector exposure capped at 25%; stocks under $10 are never eligible</li>
+      <li>VIX-based regime detection tightens or halts entries automatically in risk-off tape</li>
+      <li>Hard time-stops ahead of earnings dates — event risk is sized down, not gambled on</li>
+      <li>Paper trading only — no options, no leverage, no crypto</li>
+    </ul>
+
+    <div class="about-h">Built Autonomously</div>
+    <ul class="about-list">
+      <li>Every decision is a Git commit — the full reasoning behind every trade (and every non-trade) is permanently auditable, not just the outcome</li>
+      <li>Routine runs open a PR with their changes; a GitHub Actions pipeline auto-merges anything routine and holds only flagged issues for a one-click human review</li>
+      <li>This dashboard reads live, directly from that same source of truth — no separate database, nothing to fall out of sync</li>
+      <li>A separate manual-override lane exists for the owner's own speculative side-bets, kept visually distinct from Bull's own systematic trades</li>
+    </ul>
+
+    <div class="about-h">Built With</div>
+    <div class="about-stack">
+      <span class="chip">Claude Code</span>
+      <span class="chip">Alpaca Paper Trading API</span>
+      <span class="chip">GitHub + GitHub Actions</span>
+      <span class="chip">Vanilla JS + Chart.js</span>
+    </div>
+
+    <div class="about-footer">Bull is designed, operated, and maintained end-to-end by Claude Code · Paper trading — no real capital at risk</div>
+  </div>
+</div>
+
 <script>
 const REPO = "vinay8558/trading-agent";
 const API = `https://api.github.com/repos/${REPO}`;
@@ -616,6 +702,7 @@ let lastLoadTime = 0;
 let heroBaseValue = START_CAPITAL;
 let heroBaseChange = 0;
 let heroWindowBase = START_CAPITAL;
+let lastPortfolio = null;
 let allHistoryPoints = [];
 let currentRange = 0;
 
@@ -1251,7 +1338,46 @@ function closeTradeModal(){
   document.getElementById("tradeModal").classList.remove("open");
   document.body.style.overflow = "";
 }
-document.addEventListener("keydown", e => { if(e.key === "Escape") closeTradeModal(); });
+
+/* ── About Modal ── */
+const ROUTINE_DESCRIPTIONS = {
+  "Pre-Market":    "Research only — reads overnight news, updates the watchlist, drafts trade ideas. Never places trades.",
+  "Market Open":   "Executes trades queued by pre-market research, re-verifying every guardrail live before filling.",
+  "Midday":        "Defense only — checks stops and risk limits on open positions. Never opens new ones.",
+  "Market Close":  "End-of-day mark, alpha-vs-SPY tally, and overnight risk review.",
+  "Weekly Review": "Reads the full history, extracts patterns, and compacts memory for the week ahead.",
+};
+function renderAboutRoutines(){
+  document.getElementById("aboutRoutines").innerHTML = SCHEDULE.map(s =>
+    `<div class="about-routine">${s.icon} <b>${s.name}</b> <span>${s.time}, ${s.days} — ${ROUTINE_DESCRIPTIONS[s.name]||""}</span></div>`
+  ).join("");
+}
+function renderAboutStats(){
+  const p = lastPortfolio;
+  const eqEl=document.getElementById("aStatEquity"), retEl=document.getElementById("aStatReturn"), posEl=document.getElementById("aStatPositions");
+  if(p && p.equity!=null){
+    eqEl.textContent = fmtMoney(p.equity,0);
+    const ret = ((p.equity-START_CAPITAL)/START_CAPITAL)*100;
+    retEl.textContent = fmtPct(ret);
+    retEl.className = "v" + (ret>0?" up":ret<0?" down":"");
+    posEl.textContent = p.positions.length;
+  } else {
+    eqEl.textContent="—"; retEl.textContent="—"; posEl.textContent="—";
+  }
+  document.getElementById("aStatTrades").textContent = (window.__tradesCache||[]).length || "—";
+}
+function openAbout(){
+  renderAboutRoutines();
+  renderAboutStats();
+  document.getElementById("aboutModal").classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+function closeAbout(){
+  document.getElementById("aboutModal").classList.remove("open");
+  document.body.style.overflow = "";
+}
+
+document.addEventListener("keydown", e => { if(e.key === "Escape"){ closeTradeModal(); closeAbout(); } });
 
 function renderWatchlist(md){
   const el=document.getElementById("watchlist");
@@ -1467,6 +1593,7 @@ async function loadAll(userClick=false){
   ]);
 
   const portfolio = parsePortfolio(portfolioMd);
+  lastPortfolio = portfolio;
 
   // Hero
   heroBaseValue = portfolio.equity;
