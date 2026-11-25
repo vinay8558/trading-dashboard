@@ -13,7 +13,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%82%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="flash_news.js?v=2026-11-25.3"></script>
+<script src="flash_news.js?v=2026-11-25.4"></script>
 <style>
 :root {
   --bg: #0b0f1a;
@@ -689,11 +689,11 @@ const CHART_CACHE = "bull_chart_v2";
 const START_CAPITAL = 100000;
 
 const SCHEDULE = [
-  { name:"Pre-Market",   cron:"0 10 * * 1-5",  time:"6:00 AM ET",  icon:"🌅", days:"Mon-Fri" },
-  { name:"Market Open",  cron:"30 13 * * 1-5", time:"9:30 AM ET",  icon:"🔔", days:"Mon-Fri" },
-  { name:"Midday",       cron:"0 16 * * 1-5",  time:"12:00 PM ET", icon:"☀️",  days:"Mon-Fri" },
-  { name:"Market Close", cron:"45 19 * * 1-5", time:"3:45 PM ET",  icon:"🌙", days:"Mon-Fri" },
-  { name:"Weekly Review",cron:"30 20 * * 5",   time:"4:30 PM ET",  icon:"📈", days:"Friday"  },
+  { name:"Pre-Market",   cron:"0 11 * * 1-5",  time:"6:00 AM ET",  icon:"🌅", days:"Mon-Fri" },
+  { name:"Market Open",  cron:"45 14 * * 1-5", time:"9:45 AM ET",  icon:"🔔", days:"Mon-Fri" },
+  { name:"Midday",       cron:"0 17 * * 1-5",  time:"12:00 PM ET", icon:"☀️",  days:"Mon-Fri" },
+  { name:"Market Close", cron:"45 20 * * 1-5", time:"3:45 PM ET",  icon:"🌙", days:"Mon-Fri" },
+  { name:"Weekly Review",cron:"30 21 * * 5",   time:"4:30 PM ET",  icon:"📈", days:"Friday"  },
 ];
 const PALETTE = ['#22c55e','#06b6d4','#8b5cf6','#ec4899','#eab308','#3b82f6','#f97316','#a855f7','#14b8a6','#f43f5e'];
 
@@ -1801,7 +1801,7 @@ function resetToken(){
    BUILD must match version.json (and the ?v= on flash_news.js). On each deploy bump all three.
    Every 2 minutes (and when the tab comes back) we fetch version.json bypassing all caches;
    if it differs we reload to a URL with ?v=<new> so the CDN can't hand back the old page. */
-const BUILD = "2026-11-25.3";
+const BUILD = "2026-11-25.4";
 async function checkForNewVersion(){
   try{
     const r = await fetch("version.json?t="+Date.now(), {cache:"no-store"});
