@@ -61,7 +61,7 @@
     sectorLeanAt: 2,              // net score >= +2 → "may go up", <= -2 → "may go down"
     etfDayPct: 1,                 // sector fund up/down >= 1% today adds +1/-1
     sectors: {
-      "Tech":             { etf: "XLK", symbols: ["NVDA","MSFT","AAPL","GOOGL","AMZN","META","AVGO","AMD","TSM","ORCL","CRM","INTC","MU","QCOM","ARM","PLTR"],
+      "Tech":             { etf: "XLK", symbols: ["NVDA","MSFT","AAPL","GOOGL","AMZN","META","AVGO","AMD","TSM","ORCL","MU","SNDK","AAOI","ANET","INTC","PLTR"],
                             words: ["chip","chips","chipmaker","semiconductor","software","cloud","tech","Nvidia","Apple","Microsoft","Google","Meta","AI","data center"] },
       "Energy":           { etf: "XLE", symbols: ["XOM","CVX","COP","OXY","SLB","EOG","VST","CEG","NEE","GEV"],
                             words: ["oil","crude","OPEC","natural gas","energy","gasoline","refinery","drilling","power grid","Brent","WTI"] },
@@ -70,6 +70,63 @@
       "Financials":       { etf: "XLF", symbols: ["JPM","BAC","GS","MS","WFC","C","SCHW","BLK","V","MA"],
                             words: ["bank","banks","lender","lenders","Treasury yields","credit","mortgage","Wall Street"] },
     },
+    // Company names, so a headline saying "Nvidia" counts for NVDA in the per-stock view.
+    companyNames: {
+      NVDA: "Nvidia", MSFT: "Microsoft", AAPL: "Apple", GOOGL: "Alphabet|Google", AMZN: "Amazon", META: "Meta",
+      AVGO: "Broadcom", AMD: "AMD|Advanced Micro", TSM: "TSMC|Taiwan Semiconductor", ORCL: "Oracle", MU: "Micron",
+      SNDK: "SanDisk|Sandisk", AAOI: "Applied Optoelectronics", ANET: "Arista", INTC: "Intel", PLTR: "Palantir",
+      XOM: "Exxon", CVX: "Chevron", COP: "ConocoPhillips", OXY: "Occidental", SLB: "Schlumberger|SLB", EOG: "EOG",
+      VST: "Vistra", CEG: "Constellation Energy", NEE: "NextEra", GEV: "GE Vernova",
+      LLY: "Lilly", UNH: "UnitedHealth", JNJ: "Johnson & Johnson|J&J", MRK: "Merck", ABBV: "AbbVie", PFE: "Pfizer",
+      AMGN: "Amgen", MRNA: "Moderna", VRTX: "Vertex", REGN: "Regeneron", GILD: "Gilead", ISRG: "Intuitive Surgical",
+      JPM: "JPMorgan", BAC: "Bank of America", GS: "Goldman", MS: "Morgan Stanley", WFC: "Wells Fargo", C: "Citigroup|Citi",
+      SCHW: "Schwab", BLK: "BlackRock", V: "Visa", MA: "Mastercard",
+      TSLA: "Tesla", NFLX: "Netflix", CRM: "Salesforce", QCOM: "Qualcomm", ARM: "Arm Holdings",
+    },
+    // Big-picture rules: what kind of news usually moves which sector, and why (plain English).
+    // `match` = phrases (whole words, normal endings allowed). Effects: +1 helps, -1 hurts.
+    macroRules: [
+      { label: "Fed / higher interest rates",
+        match: ["rate hike", "hikes rates", "raise rates", "higher rates", "higher for longer", "hawkish", "yields rise", "yields jump", "yields climb", "yields surge"],
+        effects: { "Tech": [-1, "higher rates make future tech profits worth less today, so tech and growth stocks often fall"],
+                   "Financials": [+1, "banks usually earn more on loans when rates are higher"] } },
+      { label: "Fed / lower interest rates",
+        match: ["rate cut", "cuts rates", "lower rates", "dovish", "yields fall", "yields drop", "yields slide"],
+        effects: { "Tech": [+1, "cheaper money usually lifts tech and growth stocks"],
+                   "Financials": [-1, "lower rates can squeeze what banks earn on loans"] } },
+      { label: "Hot inflation",
+        match: ["hot inflation", "inflation rises", "inflation jumps", "inflation accelerates", "CPI runs hot", "hotter-than-expected", "prices rise faster"],
+        effects: { "Tech": [-1, "hot inflation raises the chance of higher rates, which usually hurts tech"] } },
+      { label: "Oil prices rising",
+        match: ["oil jumps", "oil rises", "oil surges", "oil climbs", "crude rises", "crude jumps", "crude surges", "OPEC cut", "OPEC extends", "output limits", "supply cut"],
+        effects: { "Energy": [+1, "higher oil and gas prices lift energy companies' profits"] } },
+      { label: "Oil prices falling",
+        match: ["oil falls", "oil drops", "oil slumps", "oil tumbles", "crude falls", "crude drops", "crude slumps", "oversupply", "OPEC boosts output", "OPEC raises output"],
+        effects: { "Energy": [-1, "lower oil prices squeeze energy companies' profits"] } },
+      { label: "Trade limits / tariffs",
+        match: ["export curbs", "export controls", "export ban", "chip ban", "chip restrictions", "tariff", "trade war"],
+        effects: { "Tech": [-1, "export limits and tariffs can cut chipmakers' overseas sales and raise costs"] } },
+      { label: "War / sanctions",
+        match: ["war", "missile", "airstrike", "invasion", "sanctions", "military strike"],
+        effects: { "Energy": [+1, "conflict raises oil supply risk, which tends to push energy stocks up"],
+                   "Tech": [-1, "investors often sell riskier stocks like tech when conflict flares"] } },
+      { label: "FDA approval",
+        match: ["FDA approves", "FDA approval", "FDA clears", "wins approval"],
+        effects: { "Health & Biotech": [+1, "a drug approval opens a new source of sales"] } },
+      { label: "FDA rejection / failed trial",
+        match: ["FDA rejects", "FDA declines", "complete response letter", "trial fails", "failed trial", "trial halted"],
+        effects: { "Health & Biotech": [-1, "a rejection or failed trial wipes out expected future sales"] } },
+      { label: "Slowing economy",
+        match: ["recession", "jobless claims rise", "weak jobs", "layoffs surge", "economy shrinks", "GDP contracts"],
+        effects: { "Financials": [-1, "a slowing economy means fewer loans and more defaults"],
+                   "Tech": [-1, "companies and shoppers cut spending when the economy slows"] } },
+      { label: "AI spending boom",
+        match: ["AI spending", "AI demand", "data center demand", "AI capex", "AI orders"],
+        effects: { "Tech": [+1, "more AI spending means more chip and server sales"],
+                   "Energy": [+1, "AI data centers need a lot more electricity, helping power producers"] } },
+    ],
+    stockDayPct: 2,               // a stock up/down >= 2% today adds +1/-1 to its lean
+    stockQuoteCacheSeconds: 120,  // tapped-sector quotes are reused for 2 minutes
     keyStorage: "bull_finnhub_key_v1",
     muteStorage: "bull_flash_muted_v1",
     apiBase: "https://finnhub.io/api/v1",
@@ -111,10 +168,25 @@
    * Each headline is matched to sectors by its related symbols or sector words, then counted as
    * bullish (+1) or bearish (-1) — double weight if it would also be a flash item (score >= threshold).
    */
+  // Which big-picture rules fired in the window (latest headline per rule).
+  function macroHits(news, now) {
+    const hits = new Map();
+    for (const it of news || []) {
+      if (!it || !it.headline || (now - it.datetime) / 60000 > CONFIG.sectorWindowMinutes) continue;
+      MACRO_RES.forEach((rule, i) => {
+        if (!rule.res.some(re => re.test(it.headline))) return;
+        const prev = hits.get(i);
+        if (!prev || it.datetime > prev.item.datetime) hits.set(i, { rule, item: it });
+      });
+    }
+    return [...hits.values()];
+  }
+
   function sectorOutlook(news, etfMoves, now, watchlist) {
     now = now || Date.now();
     etfMoves = etfMoves || {};
     const watchSet = new Set(watchlist || []);
+    const macros = macroHits(news, now);
     const out = [];
     for (const [name, sec] of Object.entries(SECTOR_RES)) {
       let bull = 0, bear = 0, count = 0, best = { bull: null, bear: null }, bestW = { bull: 0, bear: 0 };
@@ -138,18 +210,189 @@
       const etfMove = typeof etfMoves[sec.etf] === "number" ? etfMoves[sec.etf] : null;
       let net = bull - bear;
       if (etfMove !== null && Math.abs(etfMove) >= CONFIG.etfDayPct) net += etfMove > 0 ? 1 : -1;
+
+      // Plain-English reasons: big-picture rules first, then the strongest company headlines.
+      const reasons = [];
+      let macroNet = 0;
+      for (const h of macros) {
+        const eff = h.rule.effects[name];
+        if (!eff) continue;
+        // Same headline, same direction → count it once (e.g. "rate hike … CPI runs hot" is one story).
+        if (reasons.some(r => r.macro && r.headline === h.item.headline && r.dir === (eff[0] > 0 ? "up" : "down"))) continue;
+        net += eff[0]; macroNet += eff[0];
+        reasons.push({ dir: eff[0] > 0 ? "up" : "down", label: h.rule.label, why: eff[1], headline: h.item.headline, url: h.item.url, macro: true });
+      }
+      for (const side of ["bear", "bull"]) {
+        const b = best[side];
+        if (!b || reasons.some(r => r.headline === b.headline)) continue;
+        const who = (b.related || []).filter(s => sec.symbols.has(s))[0];
+        reasons.push({ dir: side === "bull" ? "up" : "down", label: `${side === "bull" ? "Good" : "Bad"} news${who ? " for " + who : ""}`,
+                       why: side === "bull" ? "positive company news tends to lift the stock and its peers" : "negative company news tends to drag the stock and its peers",
+                       headline: b.headline, url: b.url });
+      }
+      if (etfMove !== null && Math.abs(etfMove) >= CONFIG.etfDayPct)
+        reasons.push({ dir: etfMove > 0 ? "up" : "down", label: `${sec.etf} ${etfMove > 0 ? "up" : "down"} ${Math.abs(etfMove).toFixed(1)}% today`,
+                       why: `the whole sector is already moving ${etfMove > 0 ? "up" : "down"} today`, headline: "", url: "" });
+
       const direction = net >= CONFIG.sectorLeanAt ? "up" : net <= -CONFIG.sectorLeanAt ? "down" : "mixed";
+      // Reasons that agree with the lean go first.
+      reasons.sort((a, b) => (b.dir === direction) - (a.dir === direction));
       const verb = direction === "up" ? "may go up" : direction === "down" ? "may go down" : "mixed / no clear lean";
       const parts = [];
       if (bull || bear) parts.push(`${bull} bullish vs ${bear} bearish`);
       else parts.push(count ? `${count} headline(s), none clearly good or bad` : "no recent headlines");
       if (etfMove !== null) parts.push(`${sec.etf} ${etfMove >= 0 ? "+" : ""}${etfMove.toFixed(1)}% today`);
-      out.push({ sector: name, direction, net, bull, bear, count, etf: sec.etf, etfMove, driver: direction === "up" ? best.bull : direction === "down" ? best.bear : null,
+      const lead = reasons.find(r => r.macro && r.dir === direction);
+      if (lead) parts.unshift(lead.label);
+      const mainMacro = macroNet ? reasons.find(r => r.macro && r.dir === (macroNet > 0 ? "up" : "down")) : null;
+      out.push({ sector: name, direction, net, bull, bear, count, etf: sec.etf, etfMove, reasons, macroNet, mainMacro,
+                 driver: direction === "up" ? best.bull : direction === "down" ? best.bear : null,
                  summary: `${name} ${verb} — ${parts.join(" · ")}` });
     }
     // Strongest leans first.
     out.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
     return out;
+  }
+
+  const MACRO_RES = CONFIG.macroRules.map(r => Object.assign({}, r, {
+    res: r.match.map(w => /^[A-Z]{2,5}\b/.test(w) && w === w.toUpperCase() ? new RegExp("\\b" + reEsc(w) + "\\b") : wordRe(w)),
+  }));
+
+  const NAME_RES = Object.fromEntries(Object.entries(CONFIG.companyNames).map(([sym, n]) =>
+    [sym, new RegExp("(^|[^A-Za-z])(?:" + n.split("|").map(reEsc).join("|") + ")(?![A-Za-z])", "i")]));
+
+  /**
+   * Per-stock lean inside one sector (shown when a sector line is tapped).
+   * input = sector name, recent news, {SYM: day %}, {SYM: 5-min %}
+   * output = { up:[...], down:[...], quiet:[...] } each {sym, score, bull, bear, dayPct, move5, reason, driver}
+   * Score = bullish − bearish headlines about that stock (high-impact ones count double)
+   *         ± 1 if the stock is up/down >= 2% today, ± 1 if it moved >= 2% in the last 5 minutes.
+   */
+  function stockLeans(sectorName, news, dayPct, moves5, now, watchlist, sectorMacro) {
+    now = now || Date.now();
+    const sec = CONFIG.sectors[sectorName];
+    if (!sec) return { up: [], down: [], quiet: [] };
+    const watchSet = new Set(watchlist || []);
+    const recent = (news || []).filter(it => it && it.headline && (now - it.datetime) / 60000 <= CONFIG.sectorWindowMinutes);
+    const rows = sec.symbols.map(sym => {
+      let bull = 0, bear = 0, nBull = 0, nBear = 0, driver = null, driverW = 0;
+      const seen = new Set();
+      for (const it of recent) {
+        const k = keyOf(it);
+        if (seen.has(k)) continue;
+        const head = String(it.headline);
+        const about = (it.related || []).includes(sym) ||
+          (sym.length >= 3 && new RegExp("(^|[^A-Za-z])\\$?" + reEsc(sym) + "(?![A-Za-z])").test(head)) ||
+          (NAME_RES[sym] && NAME_RES[sym].test(head));
+        if (!about) continue;
+        seen.add(k);
+        const sent = sentimentOf(head, 0);
+        if (sent === "neutral") continue;
+        const w = KEYWORD_RES.some(re => re.test(head)) ? 2 : 1;   // high-impact headline counts double
+        if (sent === "bull") { bull += w; nBull++; } else { bear += w; nBear++; }
+        if (w >= driverW) { driver = Object.assign({ sentiment: sent }, it); driverW = w; }
+      }
+      const d = typeof (dayPct || {})[sym] === "number" ? dayPct[sym] : null;
+      const m5 = typeof (moves5 || {})[sym] === "number" ? moves5[sym] : null;
+      let score = bull - bear;
+      if (d !== null && Math.abs(d) >= CONFIG.stockDayPct) score += d > 0 ? 1 : -1;
+      if (m5 !== null && Math.abs(m5) >= CONFIG.movePct) score += m5 > 0 ? 1 : -1;
+      // Big-picture reason (e.g. higher rates hurt tech) applies when the stock is already moving that way today.
+      let macroApplied = null;
+      if (sectorMacro && sectorMacro.macroNet && d !== null && Math.abs(d) >= 0.5 && Math.sign(d) === Math.sign(sectorMacro.macroNet)) {
+        score += Math.sign(sectorMacro.macroNet);
+        macroApplied = sectorMacro.mainMacro;
+      }
+      const bits = [];
+      if (nBull) bits.push(`${nBull} good headline${nBull > 1 ? "s" : ""}`);
+      if (nBear) bits.push(`${nBear} bad headline${nBear > 1 ? "s" : ""}`);
+      if (m5 !== null && Math.abs(m5) >= CONFIG.movePct) bits.push(`${m5 > 0 ? "+" : ""}${m5.toFixed(1)}% in 5 min`);
+      if (macroApplied) bits.push(macroApplied.label);
+      if (!bits.length && d !== null) bits.push("price move only");
+
+      // One plain-English sentence for the expanded view.
+      const cut = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
+      let why;
+      if (driver && score !== 0 && (driver.sentiment === "bull") === (score > 0))
+        why = `${driver.sentiment === "bull" ? "Good" : "Bad"} news: “${cut(String(driver.headline).replace(/\s*\(TEST\)$/, ""), 80)}”`;
+      else if (macroApplied)
+        why = `${macroApplied.label} → ${macroApplied.why}`;
+      else if (d !== null && Math.abs(d) >= CONFIG.stockDayPct)
+        why = `Already ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% today with no single headline behind it`;
+      else why = bits.join(", ");
+      if (macroApplied && driver && !why.startsWith(macroApplied.label)) why += ` · also ${macroApplied.label}`;
+      return { sym, score, bull, bear, dayPct: d, move5: m5, reason: bits.join(", "), why, driver };
+    });
+    const byStrength = (a, b) => Math.abs(b.score) - Math.abs(a.score) || Math.abs(b.dayPct || 0) - Math.abs(a.dayPct || 0);
+    return {
+      up: rows.filter(r => r.score > 0).sort(byStrength),
+      down: rows.filter(r => r.score < 0).sort(byStrength),
+      quiet: rows.filter(r => r.score === 0),
+    };
+  }
+
+  /**
+   * Single-stock analysis for the search box.
+   * input  = symbol, news (its own company news + market news), today's % move, 5-min % move,
+   *          the sector-outlook rows (for big-picture reasons like Fed rates)
+   * output = { sym, sector, direction:"up"|"down"|"mixed", score, confidence, reasons:[{dir,text,url}], headlines:[...] }
+   * Headlines from the last 24h count fully, 1-3 days old count half; high-impact ones count double.
+   */
+  function analyzeSymbol(sym, news, dayPct, move5, sectorRows, now) {
+    now = now || Date.now();
+    sym = String(sym).toUpperCase();
+    const sector = Object.keys(CONFIG.sectors).find(n => CONFIG.sectors[n].symbols.includes(sym)) || null;
+    const nameRe = NAME_RES[sym];
+    const symRe = sym.length >= 2 ? new RegExp("(^|[^A-Za-z])\\$?" + reEsc(sym) + "(?![A-Za-z])") : null;
+    const seen = new Set();
+    const about = (news || []).filter(it => {
+      if (!it || !it.headline || (now - it.datetime) / 3600000 > 72) return false;
+      const k = keyOf(it);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      const h = String(it.headline);
+      return (it.related || []).includes(sym) || (symRe && symRe.test(h)) || (nameRe && nameRe.test(h));
+    }).sort((a, b) => b.datetime - a.datetime);
+
+    let score = 0;
+    const reasons = [];
+    const clean = t => String(t).replace(/\s*\(TEST\)$/, "");
+    const cut = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
+    for (const it of about) {
+      const sent = sentimentOf(it.headline, 0);
+      it._sent = sent;
+      if (sent === "neutral") continue;
+      const w = (KEYWORD_RES.some(re => re.test(it.headline)) ? 2 : 1) * ((now - it.datetime) / 3600000 <= 24 ? 1 : 0.5);
+      score += sent === "bull" ? w : -w;
+      if (reasons.filter(r => r.kind === "news").length < 3)
+        reasons.push({ kind: "news", dir: sent === "bull" ? "up" : "down", w,
+          text: `${sent === "bull" ? "Good" : "Bad"} news: “${cut(clean(it.headline), 90)}”`, url: it.url });
+    }
+    if (typeof dayPct === "number" && Math.abs(dayPct) >= CONFIG.stockDayPct) {
+      score += dayPct > 0 ? 1 : -1;
+      reasons.push({ kind: "price", dir: dayPct > 0 ? "up" : "down", w: 1, text: `Already ${dayPct > 0 ? "up" : "down"} ${Math.abs(dayPct).toFixed(1)}% today — the market is reacting` });
+    }
+    if (typeof move5 === "number" && Math.abs(move5) >= CONFIG.movePct) {
+      score += move5 > 0 ? 1 : -1;
+      reasons.push({ kind: "price", dir: move5 > 0 ? "up" : "down", w: 1, text: `Moved ${move5 > 0 ? "+" : ""}${move5.toFixed(1)}% in the last 5 minutes` });
+    }
+    const row = sector && (sectorRows || []).find(r => r.sector === sector);
+    // Big-picture (sector-wide) reasons are context: listed, but together they move the score by at most ±0.5,
+    // so a stock's own news and price action decide the call.
+    if (row) {
+      let macroSum = 0;
+      for (const m of (row.reasons || []).filter(r => r.macro).slice(0, 2)) {
+        macroSum += m.dir === "up" ? 1 : -1;
+        reasons.push({ kind: "macro", dir: m.dir, w: 0.5, text: `${m.label} → ${m.why}`, url: m.url });
+      }
+      score += Math.sign(macroSum) * 0.5;
+    }
+    const direction = score >= 1.5 ? "up" : score <= -1.5 ? "down" : "mixed";
+    const agree = reasons.filter(r => r.dir === direction).length, against = reasons.filter(r => r.dir !== direction).length;
+    const confidence = direction === "mixed" ? "Low" : (agree >= 3 && Math.abs(score) >= 3 && agree > against * 2) ? "High" : agree >= 2 ? "Medium" : "Low";
+    reasons.sort((a, b) => (b.dir === direction) - (a.dir === direction) || b.w - a.w);
+    return { sym, sector, direction, score: Math.round(score * 10) / 10, confidence, dayPct: typeof dayPct === "number" ? dayPct : null,
+             reasons, headlines: about.slice(0, 5).map(it => ({ headline: clean(it.headline), url: it.url, source: it.source, datetime: it.datetime, sentiment: it._sent })) };
   }
 
   const KEYWORD_RES = [
@@ -263,6 +506,8 @@
   let mockItems = [];
   let mockEtf = {};
   const etfDay = {};               // sector fund -> % change today
+  const stockDay = {}, stockDayAt = {};   // stock -> % change today (+ when fetched)
+  let mockDay = {};
   let state = { items: [], sectors: [], updated: null, error: null };
   let root, getWatchlist = () => [];
   let audioCtx = null;
@@ -303,7 +548,11 @@
     // Quotes for every symbol → 5-minute move tracking.
     for (const s of syms) {
       await sleep(CONFIG.staggerMs);
-      try { const q = await api("/quote", { symbol: s }); recordPrice(s, q && q.c, Date.now()); }
+      try {
+        const q = await api("/quote", { symbol: s });
+        recordPrice(s, q && q.c, Date.now());
+        if (q && typeof q.dp === "number") { stockDay[s] = q.dp; stockDayAt[s] = Date.now(); }
+      }
       catch (e) { errors.push(e.message); }
     }
 
@@ -400,6 +649,10 @@
         </div>`).join("")}</div>`;
     }
 
+    // Keep whatever is being typed in the search box across the 30-second re-renders.
+    const q0 = root.querySelector(".fn-q");
+    const typing = q0 ? { v: q0.value, focus: document.activeElement === q0, a: q0.selectionStart, b: q0.selectionEnd } : null;
+
     root.innerHTML = `<div class="fn-panel">
       <div class="fn-top">
         <span class="fn-title">⚡ Flash News${state.items.length ? ` <span class="fn-count">${state.items.length}</span>` : ""}</span>
@@ -409,9 +662,91 @@
           <button class="fn-icon fn-mute" title="${muted ? "Unmute" : "Mute"} alert sound">${muted ? "🔇" : "🔊"}</button>
           ${hasKey ? `<button class="fn-icon fn-key" title="Change or remove the Finnhub key">⚙</button>` : ""}
         </span>
-      </div>${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
+      </div>${renderSearch(hasKey)}${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
+
+    const q1 = root.querySelector(".fn-q");
+    if (q1 && typing) {
+      q1.value = typing.v;
+      if (typing.focus) { q1.focus(); try { q1.setSelectionRange(typing.a, typing.b); } catch {} }
+    }
 
     if (newKeys.size) setTimeout(() => root && root.querySelectorAll(".fn-new").forEach(el => el.classList.remove("fn-new")), CONFIG.highlightSeconds * 1000);
+  }
+
+  // ── Search: ticker or company → "may go up / down" with reasons ───────
+  function renderSearch(hasKey) {
+    if (!(hasKey || mockItems.length)) return "";
+    const s = state.search || {};
+    let out = "";
+    if (s.loading) out = `<div class="fn-muted fn-stk-note">Analyzing ${esc(s.query)}…</div>`;
+    else if (s.error) out = `<div class="fn-err fn-stk-note">${esc(s.error)}</div>`;
+    else if (s.result) {
+      const r = s.result;
+      const icon = r.direction === "up" ? "🟢▲" : r.direction === "down" ? "🔴▼" : "⚪";
+      const verdict = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "no clear direction";
+      const link = (t, u) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t)}</a>` : esc(t);
+      const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+      out = `<div class="fn-result fn-sec-${r.direction}">
+        <div class="fn-res-head">${icon} <b>${esc(r.sym)}</b>${s.name && s.name.toUpperCase() !== r.sym ? ` <span class="fn-muted">${esc(s.name)}</span>` : ""}
+          <span class="fn-res-verdict fn-${r.direction}-lbl">${verdict}</span>
+          ${r.dayPct !== null ? `<span class="${r.dayPct >= 0 ? "fn-pos" : "fn-negt"}">${r.dayPct >= 0 ? "+" : ""}${r.dayPct.toFixed(2)}% today</span>` : ""}
+          <span class="fn-muted">· confidence ${r.confidence}${r.sector ? ` · ${esc(r.sector)}` : ""}</span>
+          <button class="fn-icon fn-res-close" title="Close">✕</button></div>
+        ${r.reasons.length ? `<ul class="fn-res-why">${r.reasons.slice(0, 5).map(x =>
+          `<li class="fn-why-${x.dir}"><b>${x.dir === "up" ? "▲" : "▼"}</b> ${link(x.text, x.url)}</li>`).join("")}</ul>`
+          : `<div class="fn-muted fn-stk-note">No news about ${esc(r.sym)} in the last 3 days and no big price move — nothing to lean on.</div>`}
+        ${r.headlines.length ? `<div class="fn-stk-label" style="margin-top:6px">Latest headlines</div>${r.headlines.map(h =>
+          `<div class="fn-res-hl">${h.sentiment === "bull" ? "🟢" : h.sentiment === "bear" ? "🔴" : "⚪"} ${link(h.headline, h.url)} <span class="fn-muted">${esc(h.source || "")} · ${ago(h.datetime)}</span></div>`).join("")}` : ""}
+        <div class="fn-muted fn-stk-note">A quick read of recent news and price, not a prediction or a buy/sell call.</div>
+      </div>`;
+    }
+    return `<div class="fn-search">
+      <input class="fn-q" type="search" placeholder="Search ticker or company — e.g. NVDA, SanDisk, Exxon" autocomplete="off" spellcheck="false" enterkeyhint="search">
+      <button class="fn-btn fn-go">Analyze</button></div>${out}`;
+  }
+
+  // Ticker or company name → symbol. Known names first (no API call), then Finnhub symbol search.
+  async function resolveSymbol(q) {
+    const t = q.trim();
+    const up = t.toUpperCase().replace(/^\$/, "");
+    const known = new Set(Object.values(CONFIG.sectors).flatMap(s => s.symbols));
+    if (known.has(up)) return { sym: up, name: (CONFIG.companyNames[up] || "").split("|")[0] };
+    for (const [sym, n] of Object.entries(CONFIG.companyNames))
+      if (n.split("|").some(x => x.toLowerCase() === t.toLowerCase() || (t.length >= 4 && x.toLowerCase().startsWith(t.toLowerCase())))) return { sym, name: n.split("|")[0] };
+    if (!getKey()) {
+      if (/^[A-Z]{1,5}$/.test(up)) return { sym: up, name: "" };
+      throw new Error("Add your Finnhub key to search any company");
+    }
+    const res = await api("/search", { q: t });
+    const list = (res && res.result) || [];
+    const pick = list.find(x => x.symbol === up) || list.find(x => x.type === "Common Stock" && !/[.:]/.test(x.symbol)) || list[0];
+    if (!pick) throw new Error(`No US stock found for “${t}”`);
+    return { sym: pick.symbol, name: pick.description || "" };
+  }
+
+  async function doSearch(q) {
+    q = String(q || "").trim();
+    if (!q || (state.search && state.search.loading)) return;
+    state.search = { query: q, loading: true };
+    render();
+    try {
+      const { sym, name } = await resolveSymbol(q);
+      state.search.query = sym;
+      const now = Date.now();
+      const ymd = d => d.toISOString().slice(0, 10);
+      let own = [], dp = (stockDay[sym] !== undefined ? stockDay[sym] : mockDay[sym]);
+      if (getKey()) {
+        try {
+          own = ((await api("/company-news", { symbol: sym, from: ymd(new Date(now - 3 * 86400000)), to: ymd(new Date(now)) })) || []).map(n => normalize(n, sym));
+        } catch (e) { if (!pool.size) throw e; }
+        try { const qd = await api("/quote", { symbol: sym }); if (qd && typeof qd.dp === "number" && qd.c > 0) { dp = qd.dp; stockDay[sym] = dp; stockDayAt[sym] = Date.now(); } } catch {}
+      }
+      const result = analyzeSymbol(sym, [...own, ...pool.values(), ...mockItems], dp, priceMoves(now)[sym] ?? mockMoves[sym], state.sectors, now);
+      state.search = { query: sym, name, result };
+    } catch (e) {
+      state.search = { query: q, error: e.message || "Search failed" };
+    }
+    render();
   }
 
   // Sector Outlook strip: one line per sector, strongest lean first.
@@ -421,15 +756,85 @@
     const icon = d => d === "up" ? "🟢▲" : d === "down" ? "🔴▼" : "⚪";
     return `<div class="fn-sectors">
       <div class="fn-sec-title">📊 Sector outlook <span class="fn-muted">· last ${Math.round(CONFIG.sectorWindowMinutes / 60)}h of news</span></div>
-      ${rows.map(r => `<div class="fn-sec fn-sec-${r.direction}">
+      ${rows.map(r => {
+        const open = state.expanded === r.sector;
+        return `<div class="fn-sec fn-sec-${r.direction} ${open ? "fn-open" : ""}" data-sector="${esc(r.sector)}" role="button" tabindex="0" aria-expanded="${open}">
         <span class="fn-dir">${icon(r.direction)}</span>
         <span class="fn-sec-text"><b>${esc(r.summary.split(" — ")[0])}</b> <span class="fn-muted">— ${esc(r.summary.split(" — ").slice(1).join(" — "))}</span>
         ${r.driver && r.direction !== "mixed" ? `<span class="fn-sec-why">Driver: ${r.driver.url ? `<a href="${esc(r.driver.url)}" target="_blank" rel="noopener noreferrer">${esc(r.driver.headline)}</a>` : esc(r.driver.headline)}</span>` : ""}</span>
-      </div>`).join("")}
+        <span class="fn-chev">${open ? "▾" : "›"}</span>
+      </div>${open ? renderStocks(r) : ""}`;
+      }).join("")}
     </div>`;
   }
 
+  // Expanded view for one sector: which of its stocks may go up / down, and why.
+  function renderStocks(r) {
+    const leans = stockLeans(r.sector, [...pool.values(), ...mockItems], Object.assign({}, stockDay, mockDay),
+                             Object.assign(priceMoves(Date.now()), mockMoves), Date.now(), watchSymbols(), r);
+    const pct = x => x === null ? "" : `<span class="${x >= 0 ? "fn-pos" : "fn-negt"}">${x >= 0 ? "+" : ""}${x.toFixed(1)}%</span>`;
+    const link = (txt, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(txt)}</a>` : esc(txt);
+    const clean = t => String(t || "").replace(/\s*\(TEST\)$/, "");
+
+    // 1) Why the sector leans this way — plain English, strongest first.
+    const verb = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "is mixed";
+    const whyList = (r.reasons || []).slice(0, 4).map(x => `<li class="fn-why-${x.dir}">
+        <b>${x.dir === "up" ? "▲" : "▼"} ${esc(x.label)}</b> → ${esc(x.why)}
+        ${x.headline ? `<span class="fn-why-src">${link("“" + clean(x.headline) + "”", x.url)}</span>` : ""}</li>`).join("");
+    const whyHtml = whyList
+      ? `<div class="fn-why"><div class="fn-stk-label">Why ${esc(r.sector)} ${verb}</div><ul>${whyList}</ul></div>`
+      : `<div class="fn-muted fn-stk-note">No clear reason in the news yet.</div>`;
+
+    // 2) Which stocks, each with its own one-line reason.
+    const row = s => `<div class="fn-stk fn-stk-${s.score > 0 ? "up" : "down"}">
+        <span class="fn-stk-head"><b>${esc(s.sym)}</b> ${pct(s.dayPct)}</span>
+        <span class="fn-stk-why">${s.driver && s.driver.url && s.why.includes("news:") ? link(s.why, s.driver.url) : esc(s.why)}</span></div>`;
+    const groups = r.direction === "down"
+      ? [["down", "🔴▼ Stocks that may go down", leans.down], ["up", "🟢▲ Stocks that may go up", leans.up]]
+      : [["up", "🟢▲ Stocks that may go up", leans.up], ["down", "🔴▼ Stocks that may go down", leans.down]];
+    const loading = state.loadingSector === r.sector ? `<div class="fn-muted fn-stk-note">Getting today's prices…</div>` : "";
+    const body = groups.filter(g => g[2].length).map(g =>
+      `<div class="fn-stk-group"><div class="fn-stk-label fn-${g[0]}-lbl">${g[1]}</div><div class="fn-stk-list">${g[2].slice(0, 6).map(row).join("")}</div></div>`).join("");
+
+    return `<div class="fn-stocks">${whyHtml}${loading}${body || `<div class="fn-muted fn-stk-note">No stock in ${esc(r.sector)} has a clear signal right now.</div>`}
+      <div class="fn-muted fn-stk-note">Based on the last ${Math.round(CONFIG.sectorWindowMinutes / 60)}h of headlines + today's move. A quick read of the news, not a buy/sell call.</div></div>`;
+  }
+
+  // Tapping a sector: open it and fetch today's % move for its stocks (cached 2 min, staggered).
+  async function loadSectorQuotes(sector) {
+    const sec = CONFIG.sectors[sector];
+    if (!sec || !getKey()) return;
+    const stale = s => !stockDayAt[s] || Date.now() - stockDayAt[s] > CONFIG.stockQuoteCacheSeconds * 1000;
+    const need = sec.symbols.filter(stale);
+    if (!need.length) return;
+    state.loadingSector = sector; render();
+    for (const s of need) {
+      if (state.expanded !== sector) break;          // user closed it — stop spending calls
+      try { const q = await api("/quote", { symbol: s }); if (q && typeof q.dp === "number") { stockDay[s] = q.dp; stockDayAt[s] = Date.now(); } }
+      catch (e) { if (/rate|key/i.test(e.message)) break; }
+      await sleep(CONFIG.staggerMs);
+    }
+    if (state.loadingSector === sector) state.loadingSector = null;
+    render();
+  }
+
+  function toggleSector(sector) {
+    state.expanded = state.expanded === sector ? null : sector;
+    render();
+    if (state.expanded) loadSectorQuotes(state.expanded);
+  }
+
+  function onKey(e) {
+    if (e.target.classList && e.target.classList.contains("fn-q") && e.key === "Enter") { e.preventDefault(); doSearch(e.target.value); return; }
+    const row = e.target.closest && e.target.closest(".fn-sec");
+    if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleSector(row.dataset.sector); }
+  }
+
   function onClick(e) {
+    if (e.target.closest(".fn-go")) { doSearch((root.querySelector(".fn-q") || {}).value); return; }
+    if (e.target.closest(".fn-res-close")) { state.search = null; render(); return; }
+    const row = e.target.closest(".fn-sec");
+    if (row && !e.target.closest("a")) { toggleSector(row.dataset.sector); return; }
     const t = e.target.closest("button");
     if (!t) return;
     if (t.classList.contains("fn-save")) {
@@ -478,6 +883,32 @@
 .fn-sec-mixed b{color:var(--ink2,#94a3b8)}
 .fn-sec-text{min-width:0} .fn-sec-why{display:block;font-size:11px;color:var(--muted,#64748b)}
 .fn-sec-why a{color:inherit}
+.fn-sec{cursor:pointer} .fn-sec:hover{filter:brightness(1.25)} .fn-sec:focus-visible{outline:2px solid var(--accent,#8b5cf6)}
+.fn-chev{margin-left:auto;color:var(--muted,#64748b);font-size:13px;flex:none;padding-left:6px}
+.fn-stocks{margin:2px 0 6px 22px;padding:6px 8px;border-left:2px solid var(--line,rgba(255,255,255,.1))}
+.fn-stk-group{margin-bottom:6px}
+.fn-stk-label{font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;margin-bottom:3px}
+.fn-up-lbl{color:var(--bull,#22c55e)} .fn-down-lbl{color:var(--bear,#ef4444)}
+.fn-stk-list{display:flex;flex-direction:column;gap:4px}
+.fn-stk-head{white-space:nowrap}
+.fn-search{display:flex;gap:6px;margin-top:8px}
+.fn-q{flex:1;min-width:0;background:var(--bg2,#111827);color:var(--ink,#f1f5f9);border:1px solid var(--line,rgba(255,255,255,.12));border-radius:8px;padding:6px 9px;font-size:13px}
+.fn-result{margin-top:6px;padding:8px 10px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.08))}
+.fn-res-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:13px}
+.fn-res-verdict{font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.03em}
+.fn-mixed-lbl{color:var(--ink2,#94a3b8)}
+.fn-res-close{margin-left:auto}
+.fn-res-why{margin:6px 0 0;padding-left:16px} .fn-res-why li{font-size:12px;margin:3px 0;color:var(--ink2,#94a3b8)} .fn-res-why a{color:inherit}
+.fn-res-hl{font-size:12px;margin:3px 0;color:var(--ink2,#94a3b8)} .fn-res-hl a{color:inherit}
+.fn-why{margin-bottom:8px} .fn-why ul{margin:2px 0 0;padding-left:16px} .fn-why li{font-size:12px;margin:3px 0;color:var(--ink2,#94a3b8)}
+.fn-why-up b{color:var(--bull,#22c55e)} .fn-why-down b{color:var(--bear,#ef4444)}
+.fn-why-src{display:block;font-size:11px;color:var(--muted,#64748b)} .fn-why-src a,.fn-stk-why a{color:inherit}
+.fn-stk{display:flex;flex-direction:column;font-size:12px;padding:4px 8px;border-radius:8px;line-height:1.3;max-width:100%}
+.fn-stk-up{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3)}
+.fn-stk-down{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3)}
+.fn-stk-why{font-size:11px;color:var(--ink2,#94a3b8)}
+.fn-pos{color:var(--bull,#22c55e)} .fn-negt{color:var(--bear,#ef4444)}
+.fn-stk-note{font-size:11px;margin-top:3px;color:var(--ink2,#94a3b8)} .fn-stk-note a{color:inherit}
 .fn-time{color:var(--muted,#64748b);font-size:11px;font-variant-numeric:tabular-nums;flex:none}
 .fn-badge{font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;flex:none}
 .fn-high{background:var(--bear-bg,rgba(239,68,68,.12));color:var(--bear,#ef4444)}
@@ -506,11 +937,12 @@
   function mount(container, opts) {
     try {
       if (!container) return;
-      if (root) root.removeEventListener("click", onClick);   // safe to mount twice
+      if (root) { root.removeEventListener("click", onClick); root.removeEventListener("keydown", onKey); }   // safe to mount twice
       root = container;
       getWatchlist = (opts && opts.getWatchlist) || getWatchlist;
       injectStyles();
       root.addEventListener("click", onClick);
+      root.addEventListener("keydown", onKey);
       render();
       safePoll();
       clearInterval(timer);
@@ -539,9 +971,15 @@
       { headline: "Exxon raises production target (TEST)", url: "https://example.com/e2", source: "Mock Wire", datetime: now - 90 * 60000, related: ["XOM"], mock: true },
     ];
     mockEtf = { XLK: -1.4, XLV: 1.1, XLE: 1.6, XLF: 0.2 };
+    // Per-stock test data for the tap-to-expand view (today's % move).
+    mockDay = { NVDA: 2.4, SNDK: 3.1, AAOI: 1.8, AMD: 2.2, MSFT: -1.6, INTC: -2.3, XOM: 1.2, OXY: 2.5, CVX: -0.4, LLY: 3.4, MRNA: 2.6, PFE: -2.1 };
+    mockItems.push(
+      { headline: "SanDisk shares surge on record flash memory demand (TEST)", url: "https://example.com/s1", source: "Mock Wire", datetime: now - 35 * 60000, related: ["SNDK"], mock: true },
+      { headline: "Applied Optoelectronics wins hyperscaler order (TEST)", url: "https://example.com/s2", source: "Mock Wire", datetime: now - 55 * 60000, related: ["AAOI"], mock: true },
+      { headline: "Intel falls after weak guidance (TEST)", url: "https://example.com/s3", source: "Mock Wire", datetime: now - 65 * 60000, related: ["INTC"], mock: true });
     recompute(false);
     return state.items;
   }
 
-  global.FlashNews = { CONFIG, computeFlashItems, sectorOutlook, scoreItem, sentimentOf, mount, injectMock, _priceMoves: priceMoves };
+  global.FlashNews = { CONFIG, computeFlashItems, sectorOutlook, stockLeans, analyzeSymbol, scoreItem, sentimentOf, mount, injectMock, _priceMoves: priceMoves };
 })(window);
