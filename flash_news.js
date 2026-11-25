@@ -30,7 +30,7 @@
     freshMinutes: 10,             // "+fresh" bonus window
     moveWindowMinutes: 5,         // price-move lookback
     movePct: 2,                   // |move| >= this % counts as a big move
-    maxSymbols: 16,               // cap on watched symbols (Finnhub free tier = 60 calls/min)
+    maxSymbols: 14,               // cap on watched symbols (Finnhub free tier = 60 calls/min; ~22 calls per cycle)
     companyNewsPerCycle: 3,       // symbols whose company-news is fetched each cycle (rotates)
     // Always watched, after Bull's holdings and trending picks (sector focus).
     focusSymbols: {
@@ -39,9 +39,9 @@
     },
     // Direction of the news (colours the row). Whole words, case-insensitive.
     bullishWords: ["beats", "beat", "tops", "raises", "raised", "upgrade", "upgraded", "record", "surges", "soars",
-      "jumps", "rallies", "approves", "approval", "approved", "buyback", "wins", "awarded", "partnership", "outperform",
+      "jumps", "rally", "rallies", "rises", "gains", "climbs", "rebounds", "approves", "approval", "approved", "buyback", "wins", "awarded", "partnership", "outperform",
       "strong demand", "rate cut", "cuts rates", "ceasefire"],
-    bearishWords: ["misses", "miss", "falls", "plunges", "tumbles", "sinks", "slumps", "downgrade", "downgraded",
+    bearishWords: ["misses", "miss", "falls", "drops", "slides", "declines", "slips", "plunges", "tumbles", "sinks", "slumps", "downgrade", "downgraded",
       "cuts guidance", "lowers", "warns", "warning", "lawsuit", "sues", "probe", "investigation", "recall", "halt",
       "halted", "bankruptcy", "layoffs", "resigns", "sanctions", "war", "tariff", "tariffs", "rate hike", "hikes rates",
       "fraud", "delisted", "underperform"],
@@ -56,6 +56,20 @@
     ],
     // …except these acronyms, matched case-sensitively so "fed up" ≠ "Fed".
     acronyms: ["SEC", "FDA", "Fed", "RBI", "CPI"],
+    // ── Sector Outlook (quick read per sector from recent headlines + the sector fund's day move) ──
+    sectorWindowMinutes: 180,     // headlines from the last 3 hours count toward the outlook
+    sectorLeanAt: 2,              // net score >= +2 → "may go up", <= -2 → "may go down"
+    etfDayPct: 1,                 // sector fund up/down >= 1% today adds +1/-1
+    sectors: {
+      "Tech":             { etf: "XLK", symbols: ["NVDA","MSFT","AAPL","GOOGL","AMZN","META","AVGO","AMD","TSM","ORCL","CRM","INTC","MU","QCOM","ARM","PLTR"],
+                            words: ["chip","chips","chipmaker","semiconductor","software","cloud","tech","Nvidia","Apple","Microsoft","Google","Meta","AI","data center"] },
+      "Energy":           { etf: "XLE", symbols: ["XOM","CVX","COP","OXY","SLB","EOG","VST","CEG","NEE","GEV"],
+                            words: ["oil","crude","OPEC","natural gas","energy","gasoline","refinery","drilling","power grid","Brent","WTI"] },
+      "Health & Biotech": { etf: "XLV", symbols: ["LLY","UNH","JNJ","MRK","ABBV","PFE","AMGN","MRNA","VRTX","REGN","GILD","ISRG"],
+                            words: ["FDA","drug","drugmaker","biotech","pharma","trial","vaccine","Medicare","Medicaid","obesity","cancer","therapy"] },
+      "Financials":       { etf: "XLF", symbols: ["JPM","BAC","GS","MS","WFC","C","SCHW","BLK","V","MA"],
+                            words: ["bank","banks","lender","lenders","Treasury yields","credit","mortgage","Wall Street"] },
+    },
     keyStorage: "bull_finnhub_key_v1",
     muteStorage: "bull_flash_muted_v1",
     apiBase: "https://finnhub.io/api/v1",
@@ -67,7 +81,12 @@
   const keyOf = it => (String(it.headline || "").toLowerCase().replace(/\W+/g, " ").trim()) + "|" + String(it.url || "").split("?")[0];
 
   // Whole word, allowing normal endings: downgrade → downgraded (but "war" never matches "warehouse").
-  const wordRe = w => new RegExp("\\b" + reEsc(w).replace(/\s+/g, "\\s+") + "(?:s|es|d|ed|ing)?\\b", "i");
+  // Base forms are tried too, so "surges" also matches "surge" and "falls" matches "fall".
+  const wordRe = w => {
+    const forms = [...new Set([w, w.replace(/es$/i, ""), w.replace(/s$/i, "")])].filter(f => f.length >= 3)
+      .map(f => reEsc(f).replace(/\s+/g, "\\s+"));
+    return new RegExp("\\b(?:" + forms.join("|") + ")(?:s|es|d|ed|ing)?\\b", "i");
+  };
   const BULL_RES = CONFIG.bullishWords.map(wordRe);
   const BEAR_RES = CONFIG.bearishWords.map(wordRe);
 
@@ -78,6 +97,59 @@
     BEAR_RES.forEach(re => { if (re.test(headline)) n -= 1; });
     if (Math.abs(move || 0) >= CONFIG.movePct) n += move > 0 ? 1 : -1;   // the tape counts too
     return n > 0 ? "bull" : n < 0 ? "bear" : "neutral";
+  }
+
+  // Sector matchers: ALL-CAPS short words (AI, FDA, OPEC, WTI) are case-sensitive, others not.
+  const SECTOR_RES = Object.fromEntries(Object.entries(CONFIG.sectors).map(([name, s]) => [name, {
+    symbols: new Set(s.symbols), etf: s.etf,
+    words: s.words.map(w => /^[A-Z]{2,5}$/.test(w) ? new RegExp("\\b" + reEsc(w) + "\\b") : wordRe(w)),
+  }]));
+
+  /**
+   * Quick per-sector read. input = recent news + sector-fund day moves ({XLK: -1.2, ...})
+   * output = [{sector, direction:"up"|"down"|"mixed", net, bull, bear, etf, etfMove, count, driver, summary}]
+   * Each headline is matched to sectors by its related symbols or sector words, then counted as
+   * bullish (+1) or bearish (-1) — double weight if it would also be a flash item (score >= threshold).
+   */
+  function sectorOutlook(news, etfMoves, now, watchlist) {
+    now = now || Date.now();
+    etfMoves = etfMoves || {};
+    const watchSet = new Set(watchlist || []);
+    const out = [];
+    for (const [name, sec] of Object.entries(SECTOR_RES)) {
+      let bull = 0, bear = 0, count = 0, best = { bull: null, bear: null }, bestW = { bull: 0, bear: 0 };
+      const seen = new Set();
+      for (const it of news || []) {
+        if (!it || !it.headline || (now - it.datetime) / 60000 > CONFIG.sectorWindowMinutes) continue;
+        const k = keyOf(it);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const head = String(it.headline);
+        const hit = (it.related || []).some(s => sec.symbols.has(s)) || sec.words.some(re => re.test(head));
+        if (!hit) continue;
+        count++;
+        const sent = sentimentOf(head, 0);
+        if (sent === "neutral") continue;
+        const big = scoreItem(it, watchSet, {}, now).score >= CONFIG.flashThreshold;
+        const w = big ? 2 : 1;
+        if (sent === "bull") bull += w; else bear += w;
+        if (w > bestW[sent] || (w === bestW[sent] && best[sent] && it.datetime > best[sent].datetime)) { best[sent] = Object.assign({ sentiment: sent }, it); bestW[sent] = w; }
+      }
+      const etfMove = typeof etfMoves[sec.etf] === "number" ? etfMoves[sec.etf] : null;
+      let net = bull - bear;
+      if (etfMove !== null && Math.abs(etfMove) >= CONFIG.etfDayPct) net += etfMove > 0 ? 1 : -1;
+      const direction = net >= CONFIG.sectorLeanAt ? "up" : net <= -CONFIG.sectorLeanAt ? "down" : "mixed";
+      const verb = direction === "up" ? "may go up" : direction === "down" ? "may go down" : "mixed / no clear lean";
+      const parts = [];
+      if (bull || bear) parts.push(`${bull} bullish vs ${bear} bearish`);
+      else parts.push(count ? `${count} headline(s), none clearly good or bad` : "no recent headlines");
+      if (etfMove !== null) parts.push(`${sec.etf} ${etfMove >= 0 ? "+" : ""}${etfMove.toFixed(1)}% today`);
+      out.push({ sector: name, direction, net, bull, bear, count, etf: sec.etf, etfMove, driver: direction === "up" ? best.bull : direction === "down" ? best.bear : null,
+                 summary: `${name} ${verb} — ${parts.join(" · ")}` });
+    }
+    // Strongest leans first.
+    out.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+    return out;
   }
 
   const KEYWORD_RES = [
@@ -189,7 +261,9 @@
   let firstCycle = true;
   let rotate = 0;
   let mockItems = [];
-  let state = { items: [], updated: null, error: null };
+  let mockEtf = {};
+  const etfDay = {};               // sector fund -> % change today
+  let state = { items: [], sectors: [], updated: null, error: null };
   let root, getWatchlist = () => [];
   let audioCtx = null;
 
@@ -233,11 +307,19 @@
       catch (e) { errors.push(e.message); }
     }
 
-    // Drop stale pool entries.
-    const cutoff = Date.now() - CONFIG.maxAgeMinutes * 60000;
+    // Sector funds' day move (Finnhub quote "dp" = % change vs previous close) for the outlook.
+    const etfs = Object.values(CONFIG.sectors).map(s => s.etf);
+    for (const e of etfs) {
+      await sleep(CONFIG.staggerMs);
+      try { const q = await api("/quote", { symbol: e }); if (q && typeof q.dp === "number") etfDay[e] = q.dp; }
+      catch (err) { errors.push(err.message); }
+    }
+
+    // Drop stale pool entries (kept long enough for the 3-hour sector view).
+    const cutoff = Date.now() - Math.max(CONFIG.maxAgeMinutes, CONFIG.sectorWindowMinutes) * 60000;
     for (const [k, it] of pool) if (it.datetime < cutoff) pool.delete(k);
 
-    const allErr = errors.length && errors.length >= 1 + batch.length + syms.length;
+    const allErr = errors.length && errors.length >= 1 + batch.length + syms.length + etfs.length;
     state.error = allErr ? errors[0] : (errors.length ? `${errors.length} request(s) failed — ${errors[0]}` : null);
     if (!allErr) state.updated = new Date();
     recompute(true);
@@ -249,6 +331,7 @@
     const fresh = items.filter(it => !shownKeys.has(it.key));
     items.forEach(it => shownKeys.add(it.key));
     state.items = items;
+    state.sectors = sectorOutlook([...pool.values(), ...mockItems], Object.assign({}, etfDay, mockEtf), now, watchSymbols());
     render(fresh.map(f => f.key));
     // On first load just show what's there; alert only on genuinely new arrivals.
     if (fresh.length && !(fromPoll && firstCycle)) alertNew(fresh);
@@ -326,9 +409,24 @@
           <button class="fn-icon fn-mute" title="${muted ? "Unmute" : "Mute"} alert sound">${muted ? "🔇" : "🔊"}</button>
           ${hasKey ? `<button class="fn-icon fn-key" title="Change or remove the Finnhub key">⚙</button>` : ""}
         </span>
-      </div>${body}${state.items.length ? `<div class="fn-legend">🟢▲ bullish news · 🔴▼ bearish news — news signals only, not buy/sell orders</div>` : ""}</div>`;
+      </div>${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
 
     if (newKeys.size) setTimeout(() => root && root.querySelectorAll(".fn-new").forEach(el => el.classList.remove("fn-new")), CONFIG.highlightSeconds * 1000);
+  }
+
+  // Sector Outlook strip: one line per sector, strongest lean first.
+  function renderSectors(hasKey) {
+    const rows = state.sectors || [];
+    if (!(hasKey || mockItems.length) || !rows.length) return "";
+    const icon = d => d === "up" ? "🟢▲" : d === "down" ? "🔴▼" : "⚪";
+    return `<div class="fn-sectors">
+      <div class="fn-sec-title">📊 Sector outlook <span class="fn-muted">· last ${Math.round(CONFIG.sectorWindowMinutes / 60)}h of news</span></div>
+      ${rows.map(r => `<div class="fn-sec fn-sec-${r.direction}">
+        <span class="fn-dir">${icon(r.direction)}</span>
+        <span class="fn-sec-text"><b>${esc(r.summary.split(" — ")[0])}</b> <span class="fn-muted">— ${esc(r.summary.split(" — ").slice(1).join(" — "))}</span>
+        ${r.driver && r.direction !== "mixed" ? `<span class="fn-sec-why">Driver: ${r.driver.url ? `<a href="${esc(r.driver.url)}" target="_blank" rel="noopener noreferrer">${esc(r.driver.headline)}</a>` : esc(r.driver.headline)}</span>` : ""}</span>
+      </div>`).join("")}
+    </div>`;
   }
 
   function onClick(e) {
@@ -346,7 +444,7 @@
     } else if (t.classList.contains("fn-key")) {
       const v = global.prompt("Finnhub API key (leave empty to remove):", "");
       if (v === null) return;
-      setKey(v.trim()); state = { items: [], updated: null, error: null }; pool.clear(); render(); if (v.trim()) safePoll();
+      setKey(v.trim()); state = { items: [], sectors: [], updated: null, error: null }; pool.clear(); render(); if (v.trim()) safePoll();
     }
   }
 
@@ -372,6 +470,14 @@
 .fn-item.fn-bear{box-shadow:inset 3px 0 0 var(--bear,#ef4444)} .fn-item.fn-bear .fn-head{color:#fecaca}
 .fn-dir{font-size:11px;flex:none;letter-spacing:-2px}
 .fn-legend{font-size:10px;color:var(--muted,#64748b);margin-top:4px}
+.fn-sectors{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line,rgba(255,255,255,.1))}
+.fn-sec-title{font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--ink2,#94a3b8);margin-bottom:2px}
+.fn-sec{display:flex;gap:6px;align-items:baseline;font-size:12px;padding:3px 4px;border-radius:6px}
+.fn-sec-up{background:rgba(34,197,94,.08)} .fn-sec-up b{color:var(--bull,#22c55e)}
+.fn-sec-down{background:rgba(239,68,68,.08)} .fn-sec-down b{color:var(--bear,#ef4444)}
+.fn-sec-mixed b{color:var(--ink2,#94a3b8)}
+.fn-sec-text{min-width:0} .fn-sec-why{display:block;font-size:11px;color:var(--muted,#64748b)}
+.fn-sec-why a{color:inherit}
 .fn-time{color:var(--muted,#64748b);font-size:11px;font-variant-numeric:tabular-nums;flex:none}
 .fn-badge{font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;flex:none}
 .fn-high{background:var(--bear-bg,rgba(239,68,68,.12));color:var(--bear,#ef4444)}
@@ -424,10 +530,18 @@
         source: "Mock Wire", datetime: now - 60000, related: [sym], mock: true },          // 2+2+2+1 = 7 → HIGH
       { headline: "Fed warns of rate hike at next rate decision as CPI runs hot (TEST)", url: "https://example.com/flash-test-med",
         source: "Mock Wire", datetime: now - 120000, related: [], mock: true },             // 2+1 = 3 → MEDIUM, bearish
+      // Sector-outlook test data: Tech leans down, Health & Biotech and Energy lean up, Financials mixed.
+      { headline: "Microsoft downgraded on slowing cloud growth (TEST)", url: "https://example.com/t1", source: "Mock Wire", datetime: now - 30 * 60000, related: ["MSFT"], mock: true },
+      { headline: "Chip stocks fall on new export curbs (TEST)", url: "https://example.com/t2", source: "Mock Wire", datetime: now - 50 * 60000, related: [], mock: true },
+      { headline: "FDA approves Lilly obesity drug (TEST)", url: "https://example.com/h1", source: "Mock Wire", datetime: now - 20 * 60000, related: ["LLY"], mock: true },
+      { headline: "Biotech stocks surge after strong trial results (TEST)", url: "https://example.com/h2", source: "Mock Wire", datetime: now - 70 * 60000, related: [], mock: true },
+      { headline: "Oil jumps as OPEC extends output limits (TEST)", url: "https://example.com/e1", source: "Mock Wire", datetime: now - 40 * 60000, related: [], mock: true },
+      { headline: "Exxon raises production target (TEST)", url: "https://example.com/e2", source: "Mock Wire", datetime: now - 90 * 60000, related: ["XOM"], mock: true },
     ];
+    mockEtf = { XLK: -1.4, XLV: 1.1, XLE: 1.6, XLF: 0.2 };
     recompute(false);
     return state.items;
   }
 
-  global.FlashNews = { CONFIG, computeFlashItems, scoreItem, sentimentOf, mount, injectMock, _priceMoves: priceMoves };
+  global.FlashNews = { CONFIG, computeFlashItems, sectorOutlook, scoreItem, sentimentOf, mount, injectMock, _priceMoves: priceMoves };
 })(window);

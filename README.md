@@ -24,12 +24,15 @@ A slim banner under the top bar that shows only major, market-moving news for Bu
 | `keywords`, `acronyms` | see file | High-impact words (acronyms like SEC, Fed, CPI match case-sensitively) |
 | `focusSymbols` | tech + energy lists | Always-watched names, after holdings and trending picks |
 | `bullishWords`, `bearishWords` | see file | Decide 🟢▲ bullish vs 🔴▼ bearish colouring |
-| `maxSymbols`, `companyNewsPerCycle` | 16, 3 | Keeps each 30s cycle at ~20 calls, inside the free rate limit |
+| `maxSymbols`, `companyNewsPerCycle` | 14, 3 | With the 4 sector-fund quotes, keeps each 30s cycle at ~22 calls, inside the free rate limit |
+
+**Sector outlook.** Under the news list, one line per sector (Tech, Energy, Health & Biotech, Financials) gives a quick lean: 🟢▲ *may go up*, 🔴▼ *may go down*, or ⚪ *mixed*. It counts bullish vs bearish headlines from the last 3 hours that mention the sector's stocks or words (a headline that would also be a flash item counts double), adds ±1 if the sector fund (XLK, XLE, XLV, XLF) is up or down 1%+ today, and leans when the net is ±2 or more. It also links the headline driving the lean. Sectors, their stocks, words and thresholds live in `CONFIG.sectors`, `sectorWindowMinutes`, `sectorLeanAt` and `etfDayPct`.
 
 **Signals, not orders.** Green ▲ / red ▼ reflect the wording of the headline plus the 5-minute price move. They are news signals for a human to look at, not buy/sell instructions — Bull's routines do not read this panel.
 
 **Testing.** Open the dashboard with `?flashtest=1` (or run `FlashNews.injectMock()` in the browser console). It adds two fake items without needing a key:
 - `NVDA beats earnings, raises full-year guidance (TEST)` with a pretend +2.6% move → score 7, **HIGH**, 🟢▲
 - `Fed warns of rate hike at next rate decision as CPI runs hot (TEST)` → score 3, **MEDIUM**, 🔴▼
+- Sector outlook: Energy 🟢▲ and Health & Biotech 🟢▲ may go up, Tech 🔴▼ may go down, Financials ⚪ mixed
 
 To test background alerts: click 🔔 to allow notifications, switch to another tab, then run `FlashNews.injectMock()` from the console of the dashboard tab after it has been hidden (or wait for real news).
