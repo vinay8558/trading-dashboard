@@ -590,7 +590,7 @@ body::before{
     </div>
     <div id="mDetail" class="modal-detail">—</div>
     <div class="modal-section">
-      <div class="modal-section-label">Why bought — thesis</div>
+      <div class="modal-section-label" id="mThesisLabel">Why bought — thesis</div>
       <div id="mThesis" class="modal-section-body">—</div>
     </div>
     <div class="modal-section" id="mSignalsSection" style="display:none">
@@ -725,9 +725,13 @@ async function ghGet(p){
   if(!r.ok) throw new Error(`API error ${r.status}`);
   return r.json();
 }
+function b64utf8(b64){
+  const bin=atob(b64.replace(/\n/g,""));
+  return new TextDecoder("utf-8").decode(Uint8Array.from(bin,c=>c.charCodeAt(0)));
+}
 async function fetchFile(path){
   const d=await ghGet(`/contents/${path}`);
-  return d.encoding==="base64" ? atob(d.content.replace(/\n/g,"")) : (d.content||"");
+  return d.encoding==="base64" ? b64utf8(d.content) : (d.content||"");
 }
 async function ghGraphQL(query,variables){
   const r=await fetch("https://api.github.com/graphql",{
@@ -909,43 +913,98 @@ function extractEquity(md){
 
 function parseTrades(md){
   const trades=[];
+  const NOT_TICKER = /^(BUY|SELL|SOLD|BOUGHT|HALF|REMAINING|MANUAL|CORE|UTC|ET|GTC|HWM|SPY|VXX|AM|PM|AND|THE|OF|AT)$/;
+  const cleanMd = s => (s||"").replace(/\*\*|`/g,"").replace(/\s+/g," ").trim();
 
-  // Field-per-line block format — this is the format documented at the top of
-  // trade-log.md itself (**Action:** BUY / **Ticker:** NEE / **Shares:** 34 / ...),
-  // one block per "### " heading. Try this first since it's the canonical format.
-  const blocks = md.split(/\n(?=###\s)/);
+  // Field-per-line block format (**Action:** BUY / **Ticker:** NEE / ...), one or
+  // more trades per "### " heading. A block can hold several trades (e.g.
+  // "SOLD QBTS, IONQ"), so every **Action:** line starts its own segment.
+  const blocks = md.split(/\n(?=###\s)/).filter(b=>/^###\s/.test(b.trim()));
   for(const block of blocks){
-    const actionM = block.match(/\*\*Action:?\*\*\s*(BUY|SELL)\b/i);
-    if(!actionM) continue; // skips HOLD / no-trade entries
-    const tickerM = block.match(/\*\*Ticker:?\*\*\s*([A-Z]{1,5})/i);
-    if(!tickerM) continue;
-    const sharesM = block.match(/\*\*Shares:?\*\*\s*([\d,.]+)/i);
-    const priceM = block.match(/\*\*Price:?\*\*\s*\$?([\d,.]+)/i);
-    const valueM = block.match(/\*\*Total Value:?\*\*\s*\$?([\d,.]+)/i);
-    const headingM = block.match(/^###\s*(.+)/);
-    const dateM = block.match(/\*\*Date\/Time:?\*\*\s*([^\n]+)/i);
-    const typeM = block.match(/\*\*Type:?\*\*\s*(MANUAL|AUTO)\b/i);
-    // Extract free-form fields; each stops at the next **Field:** or end-of-block.
-    const grabField = (label) => {
-      const re = new RegExp(`\\*\\*${label}:?\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*[A-Z][^*]*:?\\*\\*|\\n###|$)`, 'i');
-      const m = block.match(re);
-      return m ? m[1].trim().replace(/\s+/g, ' ') : "";
-    };
-    const shares = sharesM ? sharesM[1] : "";
-    const price = priceM ? priceM[1] : "";
-    trades.push({
-      action: actionM[1].toUpperCase(),
-      ticker: tickerM[1],
-      detail: shares && price ? `${shares} shares @ $${price}` : (shares ? `${shares} shares` : ""),
-      amount: valueM ? `$${valueM[1]}` : "",
-      date: dateM ? dateM[1].trim() : (headingM ? headingM[1].trim() : ""),
-      isManual: typeM ? typeM[1].toUpperCase() === "MANUAL" : false,
-      thesis: grabField("Thesis"),
-      signals: grabField("Signals"),
-      stopLoss: grabField("Stop-Loss"),
-      target: grabField("Target"),
-    });
+    const heading = (block.match(/^###\s*(.+)/)||[])[1]||"";
+    const headDate = (heading.match(/\d{4}-\d{2}-\d{2}/)||[""])[0];
+    const actionRe = /\*\*Action:?\*\*[ \t]*([^\n]*)/gi;
+    const acts = [...block.matchAll(actionRe)].filter(m=>/^\W*(BUY|SELL)\b/i.test(m[1]));
+
+    // Heading-only fallback, e.g. "SELL: GD 16 shares stopped out at $344.35"
+    // where the Action line describes the stop PATCH, not the fill.
+    if(!acts.length){
+      const hm = heading.match(/\b(SELL|SOLD|BUY|BOUGHT)\b[:\s]+(?:REMAINING\s+|HALF\s+)?([A-Z]{1,5})\s+(\d+)\s+shares?\b[^$]*\$([\d,.]+)/);
+      if(hm){
+        const act = /^S/.test(hm[1]) ? "SELL" : "BUY";
+        const sh = parseFloat(hm[3]), px = parseFloat(hm[4].replace(/,/g,""));
+        const why = (heading.match(/\(([^)]*)/)||[])[1]||"";
+        trades.push({action:act,ticker:hm[2],detail:`${hm[3]} shares @ $${hm[4]}`,
+          amount:fmtMoney(sh*px),date:headDate,isManual:false,
+          thesis:cleanMd(why),signals:"",stopLoss:"",target:""});
+      }
+      continue;
+    }
+
+    for(let i=0;i<acts.length;i++){
+      // Segment = from this trade's **Date/Time:** (if it sits just above the
+      // Action line) to the next trade's start.
+      let start = acts[i].index;
+      const prevEnd = i ? acts[i-1].index + acts[i-1][0].length : 0;
+      const before = block.slice(prevEnd, start);
+      const dIdx = before.lastIndexOf("**Date/Time");
+      if(dIdx>=0) start = prevEnd + dIdx;
+      let end = block.length;
+      if(i+1<acts.length){
+        end = acts[i+1].index;
+        const between = block.slice(acts[i].index, end);
+        const nd = between.lastIndexOf("**Date/Time");
+        if(nd>0) end = acts[i].index + nd;
+      }
+      const seg = block.slice(start, end);
+      const actLine = acts[i][1];
+      const action = /^\W*SELL/i.test(actLine) ? "SELL" : "BUY";
+
+      const field = (label) => {
+        const re = new RegExp(`\\*\\*${label}:?\\*\\*[ \\t]*([\\s\\S]*?)(?=\\n\\s*\\*\\*[A-Z][^*\\n]{0,40}:?\\*\\*|\\n###|\\n---|$)`, 'i');
+        const m = seg.match(re);
+        return m ? cleanMd(m[1]) : "";
+      };
+
+      let ticker = (seg.match(/\*\*Ticker:?\*\*\s*([A-Z]{1,5})\b/)||[])[1];
+      if(!ticker){
+        const cands = (actLine.match(/\b[A-Z]{2,5}\b/g)||[]).filter(t=>!NOT_TICKER.test(t));
+        ticker = cands[0];
+      }
+      if(!ticker && acts.length===1){
+        const hc = (heading.replace(/\d{4}-\d{2}-\d{2}/,"").match(/\b[A-Z]{2,5}\b/g)||[]).filter(t=>!NOT_TICKER.test(t));
+        ticker = hc[0];
+      }
+      if(!ticker) continue;
+
+      let shares = (seg.match(/\*\*Shares:?\*\*\s*([\d,.]+)/i)||[])[1] || (actLine.match(/(\d[\d,]*)\s*shares?/i)||[])[1] || "";
+      let price = (seg.match(/\*\*Price:?\*\*\s*\$?([\d,.]+)/i)||[])[1]
+        || (actLine.match(/filled\s*@\s*\**\$?([\d,.]+)/i)||[])[1]
+        || (actLine.match(/@\s*\**\$?([\d,.]+)/)||[])[1] || "";
+      shares = shares.replace(/,$/,""); price = price.replace(/[.,]$/,"");
+      const valueM = seg.match(/\*\*Total Value:?\*\*\s*\$?([\d,.]+)/i);
+      const sh = parseFloat(shares.replace(/,/g,"")), px = parseFloat(price.replace(/,/g,""));
+      const amount = valueM ? `$${valueM[1].replace(/[.,]$/,"")}` : (sh && px ? fmtMoney(sh*px) : "");
+      const dateLine = (seg.match(/\*\*Date\/Time:?\*\*\s*([^\n]+)/i)||[])[1]||"";
+      const date = (dateLine.match(/\d{4}-\d{2}-\d{2}/)||[])[0] || headDate || cleanMd(dateLine).slice(0,30);
+      const isManual = /\*\*Type:?\*\*\s*MANUAL/i.test(seg) || /\bMANUAL\b/.test(heading);
+
+      // Reason: Thesis first; sells often log the exit reason elsewhere.
+      const headWhy = acts.length===1 ? cleanMd((heading.match(/\(([^)]*)/)||[])[1]||"") : "";
+      let thesis = field("Thesis") || field("Reason") || field("Exit reason") || headWhy
+        || field("Why[^*]*") || field("Trigger") || cleanMd(actLine.replace(/^\W*(BUY|SELL)\W*/i,""));
+      trades.push({
+        action, ticker,
+        detail: shares && price ? `${shares} shares @ $${price}` : (shares ? `${shares} shares` : ""),
+        amount, date, isManual, thesis,
+        signals: field("Signals"),
+        stopLoss: field("Stop-Loss"),
+        target: field("Target"),
+      });
+    }
   }
+  // Newest first by date (log is mostly newest-first already; this fixes stragglers).
+  trades.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   if(trades.length) return trades;
 
   // Table format
@@ -1141,7 +1200,26 @@ function renderAllocChart(portfolio){
 }
 
 /* ── Portfolio History from Git ── */
-async function buildHistory(){
+async function buildHistory(currentEquity){
+  // Preferred source: one small CSV the market-close routine appends to daily.
+  try{
+    const csv = await fetchFile("memory/equity-history.csv");
+    const pts = csv.split(/\r?\n/).slice(1).map(l=>l.split(","))
+      .filter(c=>/^\d{4}-\d{2}-\d{2}$/.test((c[0]||"").trim()) && parseFloat(c[1])>1000)
+      .map(c=>({date:new Date(c[0].trim()+"T21:00:00Z").toISOString(), value:parseFloat(c[1])}));
+    if(pts.length>=2){
+      // Add today's live value from portfolio-state.md so the line ends at "now".
+      const today = new Date().toISOString().slice(0,10);
+      const last = pts[pts.length-1];
+      if(currentEquity && last.date.slice(0,10)!==today) pts.push({date:new Date().toISOString(), value:currentEquity});
+      else if(currentEquity) last.value = currentEquity;
+      return pts;
+    }
+  }catch{}
+  return buildHistoryFromCommits();
+}
+
+async function buildHistoryFromCommits(){
   let cache;
   try{cache=JSON.parse(localStorage.getItem(CHART_CACHE)||"{}");} catch{cache={};}
 
@@ -1156,7 +1234,7 @@ async function buildHistory(){
   for(const c of toFetch.slice(0,8)){
     try{
       const f=await ghGet(`/contents/memory/portfolio-state.md?ref=${c.sha}`);
-      const txt=atob(f.content.replace(/\n/g,""));
+      const txt=b64utf8(f.content);
       const val=extractEquity(txt);
       if(val){cache[c.sha]=val;points.push({date:c.commit.author.date,value:val});}
     }catch{}
@@ -1198,6 +1276,7 @@ function showHoldingModal(idx){
   $("mTicker").textContent = p.ticker;
   $("mManualTag").innerHTML = "";
   $("mDetail").textContent = `${p.shares} shares @ avg $${(p.avgCost||0).toFixed(2)} · now $${(p.currentPrice||0).toFixed(2)} · ${fmtSign(p.pnl)} (${fmtPct(p.pnlPct)})`;
+  $("mThesisLabel").textContent = "Why bought — thesis";
   $("mThesis").textContent = p.thesis || "No thesis captured in portfolio-state.md for this position yet.";
   $("mSignalsSection").style.display = "none";
   $("mStopSection").style.display = "none";
@@ -1315,6 +1394,7 @@ function showTradeModal(idx){
   $("mTicker").textContent = t.ticker;
   $("mManualTag").innerHTML = t.isManual ? '<span class="trade-manual-tag">MANUAL</span>' : "";
   $("mDetail").textContent = [t.detail, t.amount].filter(Boolean).join(" · ") || "—";
+  $("mThesisLabel").textContent = t.action==="SELL" ? "Why sold" : "Why bought — thesis";
   $("mThesis").textContent = t.thesis || (t.isManual ? "Owner-directed manual override, speculative side-bet — no formal thesis." : "No thesis captured in the trade log.");
   // Signals as chips
   if(t.signals){
@@ -1435,11 +1515,23 @@ function renderThinking(researchMd){
   // "### " heading is the latest entry. Scope everything below to just that
   // entry — otherwise numbered lists from older days (and "Plan for tomorrow"
   // items) get mixed in as if they were today's decisions.
-  const entries = researchMd.split(/\n(?=###\s)/).filter(b=>/^###\s/.test(b.trim()));
-  const latestEntry = entries.length ? entries[0] : researchMd;
+  // Entries start with either "### 2026-11-24 ..." or a bold date line
+  // "**2026-11-24 market-close ...**" (routines used both). Pick the newest
+  // by date, not by position, so a stray old entry at the top can't win.
+  const startRe = /\n(?=###\s|\*\*\d{4}-\d{2}-\d{2}[^\n]*\*\*\s*\n)/;
+  const entries = ("\n"+researchMd).split(startRe)
+    .map(b=>b.trim())
+    .filter(b=>/^(###\s|\*\*\d{4}-\d{2}-\d{2})/.test(b));
+  const dateOf = b => (b.match(/\d{4}-\d{2}-\d{2}/)||[""])[0];
+  let latestEntry = researchMd;
+  if(entries.length){
+    const newest = entries.map(dateOf).sort().pop();
+    latestEntry = entries.find(b=>dateOf(b)===newest);  // first in file = latest routine that day
+  }
 
-  const dateMatch=latestEntry.match(/###\s*([\d-]+)/);
-  if(dateMatch) dateEl.textContent=dateMatch[1];
+  const dateMatch = latestEntry.match(/\d{4}-\d{2}-\d{2}/);
+  const titleLine = (latestEntry.split("\n")[0]||"").replace(/^###\s*|\*\*/g,"").trim();
+  if(dateMatch) dateEl.textContent = titleLine.length<70 ? titleLine : dateMatch[0];
 
   // Extract trade ideas / action items from latest entry only
   const cards=[];
@@ -1449,7 +1541,7 @@ function renderThinking(researchMd){
   // This is unambiguous, unlike guessing from free-form prose below.
   const verdictMatch = latestEntry.match(/\*\*Today'?s?\s*Verdict:?\*\*([\s\S]*?)(?=\n\*\*[A-Z][a-z]|\n---|\n###|$)/i);
   const verdictItems = verdictMatch
-    ? [...verdictMatch[1].matchAll(/\d+\.\s*\*\*([A-Z]{1,5})\*\*\s*[—–-]\s*(ENTERED|BLOCKED|WATCHING|SOLD)\s*[—–-]\s*(.+)/gi)]
+    ? [...verdictMatch[1].matchAll(/\d+\.\s*\*\*([A-Z]{1,5})\*\*\s*[—–-]\s*(ENTERED|BOUGHT|QUEUED|BLOCKED|WATCHING|SOLD|HOLD|HOLDING|TRIMMED)\s*[—–-]\s*(.+)/g)]
     : [];
 
   const STATUS_MAP = {
@@ -1457,6 +1549,11 @@ function renderThinking(researchMd){
     SOLD:     {label:'Traded',        lblCls:'lbl-passed', cardCls:'passed'},
     BLOCKED:  {label:'Not Ready',     lblCls:'lbl-blocked',cardCls:'blocked'},
     WATCHING: {label:'Watching',      lblCls:'lbl-watch',  cardCls:'watch'},
+    BOUGHT:   {label:'Bought',        lblCls:'lbl-passed', cardCls:'passed'},
+    QUEUED:   {label:'Buying at open',lblCls:'lbl-passed', cardCls:'passed'},
+    HOLD:     {label:'Holding',       lblCls:'lbl-watch',  cardCls:'watch'},
+    HOLDING:  {label:'Holding',       lblCls:'lbl-watch',  cardCls:'watch'},
+    TRIMMED:  {label:'Took profit',   lblCls:'lbl-passed', cardCls:'passed'},
   };
 
   if(verdictItems.length){
@@ -1470,11 +1567,11 @@ function renderThinking(researchMd){
 
   // Fallback for entries written before the Today's Verdict format existed:
   // guess status/signals from free-form prose numbered lists.
-  let ideaBlocks = verdictItems.length ? [] : [...latestEntry.matchAll(/\d+\.\s*\*\*([A-Z]{1,5})(?:\s*\/\s*[A-Z]{1,5})*\*\*\s*[—–-]\s*([\s\S]*?)(?=\n\d+\.\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+  let ideaBlocks = verdictItems.length ? [] : [...latestEntry.matchAll(/\d+\.\s*\*\*([A-Z]{1,5})(?:\s*\/\s*[A-Z]{1,5})*\*\*\s*[—–-]\s*([\s\S]*?)(?=\n\d+\.\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/g)];
 
   if(!verdictItems.length && !ideaBlocks.length){
     // Further fallback: bulleted "Opportunities Found" format, e.g. "- **NEE (NextEra Energy):** ..."
-    ideaBlocks=[...latestEntry.matchAll(/[-*]\s*\*\*([A-Z]{1,5})(?:\s*\([^)]*\))?:?\*\*\s*[—–-]?\s*([\s\S]*?)(?=\n[-*]\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/gi)];
+    ideaBlocks=[...latestEntry.matchAll(/[-*]\s*\*\*([A-Z]{1,5})(?:\s*\([^)]*\))?:?\*\*\s*[—–-]?\s*([\s\S]*?)(?=\n[-*]\s*\*\*[A-Z]|\n\*\*(?:Risks|Action)|\n---|\n###|$)/g)];
   }
 
   for(const m of ideaBlocks){
@@ -1517,6 +1614,20 @@ function renderThinking(researchMd){
   let actionItems=[];
   if(actionMatch){
     actionItems=[...actionMatch[1].matchAll(/[-*]\s+(.*)/g)].map(m=>m[1].replace(/\*\*/g,'').trim()).filter(Boolean);
+  }
+
+  // Verdict written as prose (no per-ticker lines): show it as one summary card
+  // with its numbered points, instead of dumping raw markdown.
+  if(!cards.length && verdictMatch){
+    const clean = t => t.replace(/\*\*|`/g,'').replace(/\s+/g,' ').trim();
+    const firstLine = clean(verdictMatch[1].split(/\n/)[0]||'');
+    const points = [...verdictMatch[1].matchAll(/^\s*\d+\.\s+(.+)$/gm)].map(m=>clean(m[1])).slice(0,4);
+    const cut = t => t.length>170 ? t.slice(0,167)+'...' : t;
+    let h = `<div class="thinking-cards"><div class="think-card action"><div class="think-label lbl-action">Latest decision</div>`;
+    if(firstLine) h += `<div class="think-reason">${escHtml(cut(firstLine))}</div>`;
+    for(const p of points) h += `<div class="think-reason">• ${escHtml(cut(p))}</div>`;
+    el.innerHTML = h + `</div></div>`;
+    return;
   }
 
   if(!cards.length && !actionItems.length){
@@ -1614,7 +1725,7 @@ async function loadAll(userClick=false){
   await renderActivity();
 
   // Portfolio chart (async, may take a few seconds)
-  buildHistory().then(pts=>renderPortfolioChart(pts));
+  buildHistory(portfolio.equity).then(pts=>renderPortfolioChart(pts)).catch(e=>console.warn("chart:",e));
 
   lastLoadTime = Date.now();
 }
@@ -1631,9 +1742,12 @@ function showDashboard(){
   setInterval(renderSchedule,30000);
   setInterval(()=>{if(isMarketRelevant())checkForChanges()},60000);
   setInterval(updateStatus,5000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)loadAll(false)});
-  window.addEventListener("focus",()=>{if(Date.now()-lastLoadTime>30000)loadAll(false)});
-  window.addEventListener("pageshow",(e)=>{if(e.persisted)loadAll(false)});
+  // Coming back to the tab only reloads if the repo actually has a new commit
+  // (cheap 1-request check) — not a full re-render every time you switch apps.
+  const softRefresh=()=>{ if(!document.hidden && Date.now()-lastLoadTime>60000) checkForChanges(); };
+  document.addEventListener("visibilitychange",softRefresh);
+  window.addEventListener("focus",softRefresh);
+  window.addEventListener("pageshow",(e)=>{if(e.persisted)softRefresh()});
 }
 
 function isMarketRelevant(){
