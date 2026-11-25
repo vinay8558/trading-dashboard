@@ -13,6 +13,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%82%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="flash_news.js"></script>
 <style>
 :root {
   --bg: #0b0f1a;
@@ -467,6 +468,9 @@ body::before{
   </div>
 
   <div id="errorBox"></div>
+
+  <!-- Flash News (self-contained module: flash_news.js) -->
+  <div id="flashNews"></div>
 
   <!-- Needs Your Review -->
   <div class="sec" id="reviewSection" style="display:none">
@@ -1702,6 +1706,11 @@ async function loadAll(userClick=false){
     fetchFile("memory/research-log.md").catch(()=>""),
     fetchFile("memory/learnings.md").catch(()=>""),
   ]);
+  // Bull's "trending" picks for Flash News: top of the latest momentum ranking.
+  fetchFile("memory/current-state.md").then(md=>{
+    const sec=(md.match(/##\s*Latest Ranking[\s\S]*?(?=\n##\s|$)/i)||[""])[0];
+    window.__bullTrending=[...new Set((sec.match(/\b[A-Z]{2,5}\b/g)||[]).filter(t=>!/^(TOP|ET|UTC|MA|SPY)$/.test(t)))].slice(0,6);
+  }).catch(()=>{});
 
   const portfolio = parsePortfolio(portfolioMd);
   lastPortfolio = portfolio;
@@ -1739,6 +1748,10 @@ function showDashboard(){
   document.getElementById("setupScreen").style.display="none";
   document.getElementById("dashboard").style.display="block";
   loadAll();
+  // Flash News: holdings first, then Bull's trending picks; the module adds tech + energy focus names.
+  if(window.FlashNews) FlashNews.mount(document.getElementById("flashNews"),{
+    getWatchlist:()=>[...((lastPortfolio&&lastPortfolio.positions)||[]).map(p=>p.ticker), ...(window.__bullTrending||[])]
+  });
   setInterval(renderSchedule,30000);
   setInterval(()=>{if(isMarketRelevant())checkForChanges()},60000);
   setInterval(updateStatus,5000);
