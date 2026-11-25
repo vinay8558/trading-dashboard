@@ -135,6 +135,15 @@
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Headline link: the article itself, or (no URL) a Google News search for the headline text.
+  const newsSearchUrl = h => "https://news.google.com/search?q=" +
+    encodeURIComponent(String(h).replace(/\s*\(TEST\)\s*$/, "").replace(/[“”"]/g, "").trim()) + "&hl=en-US&gl=US&ceid=US:en";
+  function aLink(text, url, headline) {
+    const href = url || (headline ? newsSearchUrl(headline) : "");
+    if (!href) return esc(text);
+    const tip = url ? "" : ' title="No direct article link: opens a news search for this headline"';
+    return '<a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer"' + tip + ">" + esc(text) + "</a>";
+  }
   const keyOf = it => (String(it.headline || "").toLowerCase().replace(/\W+/g, " ").trim()) + "|" + String(it.url || "").split("?")[0];
 
   // Whole word, allowing normal endings: downgrade → downgraded (but "war" never matches "warehouse").
@@ -366,7 +375,7 @@
       score += sent === "bull" ? w : -w;
       if (reasons.filter(r => r.kind === "news").length < 3)
         reasons.push({ kind: "news", dir: sent === "bull" ? "up" : "down", w,
-          text: `${sent === "bull" ? "Good" : "Bad"} news: “${cut(clean(it.headline), 90)}”`, url: it.url });
+          text: `${sent === "bull" ? "Good" : "Bad"} news: “${cut(clean(it.headline), 90)}”`, url: it.url, headline: it.headline });
     }
     if (typeof dayPct === "number" && Math.abs(dayPct) >= CONFIG.stockDayPct) {
       score += dayPct > 0 ? 1 : -1;
@@ -383,7 +392,7 @@
       let macroSum = 0;
       for (const m of (row.reasons || []).filter(r => r.macro).slice(0, 2)) {
         macroSum += m.dir === "up" ? 1 : -1;
-        reasons.push({ kind: "macro", dir: m.dir, w: 0.5, text: `${m.label} → ${m.why}`, url: m.url });
+        reasons.push({ kind: "macro", dir: m.dir, w: 0.5, text: `${m.label} → ${m.why}`, url: m.url, headline: m.headline });
       }
       score += Math.sign(macroSum) * 0.5;
     }
@@ -644,7 +653,7 @@
           <span class="fn-time">${fmtTime(new Date(it.datetime))}</span>
           <span class="fn-badge fn-${it.impact === "HIGH" ? "high" : "med"}">${it.impact}</span>
           ${(it.symbols.length ? it.symbols : ["MKT"]).slice(0, 2).map(s => `<span class="fn-sym">${esc(s)}</span>`).join("")}
-          <span class="fn-head">${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.headline)}</a>` : esc(it.headline)}
+          <span class="fn-head">${aLink(it.headline, it.url, it.headline)}
             <span class="fn-src">${esc(it.source)}${it.mock ? " · TEST" : ""}</span></span>
         </div>`).join("")}</div>`;
     }
@@ -684,7 +693,7 @@
       const r = s.result;
       const icon = r.direction === "up" ? "🟢▲" : r.direction === "down" ? "🔴▼" : "⚪";
       const verdict = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "no clear direction";
-      const link = (t, u) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t)}</a>` : esc(t);
+      const link = (t, u, h) => aLink(t, u, h);
       const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
       out = `<div class="fn-result fn-sec-${r.direction}">
         <div class="fn-res-head">${icon} <b>${esc(r.sym)}</b>${s.name && s.name.toUpperCase() !== r.sym ? ` <span class="fn-muted">${esc(s.name)}</span>` : ""}
@@ -693,10 +702,10 @@
           <span class="fn-muted">· confidence ${r.confidence}${r.sector ? ` · ${esc(r.sector)}` : ""}</span>
           <button class="fn-icon fn-res-close" title="Close">✕</button></div>
         ${r.reasons.length ? `<ul class="fn-res-why">${r.reasons.slice(0, 5).map(x =>
-          `<li class="fn-why-${x.dir}"><b>${x.dir === "up" ? "▲" : "▼"}</b> ${link(x.text, x.url)}</li>`).join("")}</ul>`
+          `<li class="fn-why-${x.dir}"><b>${x.dir === "up" ? "▲" : "▼"}</b> ${link(x.text, x.url, x.headline)}</li>`).join("")}</ul>`
           : `<div class="fn-muted fn-stk-note">No news about ${esc(r.sym)} in the last 3 days and no big price move — nothing to lean on.</div>`}
         ${r.headlines.length ? `<div class="fn-stk-label" style="margin-top:6px">Latest headlines</div>${r.headlines.map(h =>
-          `<div class="fn-res-hl">${h.sentiment === "bull" ? "🟢" : h.sentiment === "bear" ? "🔴" : "⚪"} ${link(h.headline, h.url)} <span class="fn-muted">${esc(h.source || "")} · ${ago(h.datetime)}</span></div>`).join("")}` : ""}
+          `<div class="fn-res-hl">${h.sentiment === "bull" ? "🟢" : h.sentiment === "bear" ? "🔴" : "⚪"} ${link(h.headline, h.url, h.headline)} <span class="fn-muted">${esc(h.source || "")} · ${ago(h.datetime)}</span></div>`).join("")}` : ""}
         <div class="fn-muted fn-stk-note">A quick read of recent news and price, not a prediction or a buy/sell call.</div>
       </div>`;
     }
@@ -761,7 +770,7 @@
         return `<div class="fn-sec fn-sec-${r.direction} ${open ? "fn-open" : ""}" data-sector="${esc(r.sector)}" role="button" tabindex="0" aria-expanded="${open}">
         <span class="fn-dir">${icon(r.direction)}</span>
         <span class="fn-sec-text"><b>${esc(r.summary.split(" — ")[0])}</b> <span class="fn-muted">— ${esc(r.summary.split(" — ").slice(1).join(" — "))}</span>
-        ${r.driver && r.direction !== "mixed" ? `<span class="fn-sec-why">Driver: ${r.driver.url ? `<a href="${esc(r.driver.url)}" target="_blank" rel="noopener noreferrer">${esc(r.driver.headline)}</a>` : esc(r.driver.headline)}</span>` : ""}</span>
+        ${r.driver && r.direction !== "mixed" ? `<span class="fn-sec-why">Driver: ${aLink(r.driver.headline, r.driver.url, r.driver.headline)}</span>` : ""}</span>
         <span class="fn-chev">${open ? "▾" : "›"}</span>
       </div>${open ? renderStocks(r) : ""}`;
       }).join("")}
@@ -773,14 +782,14 @@
     const leans = stockLeans(r.sector, [...pool.values(), ...mockItems], Object.assign({}, stockDay, mockDay),
                              Object.assign(priceMoves(Date.now()), mockMoves), Date.now(), watchSymbols(), r);
     const pct = x => x === null ? "" : `<span class="${x >= 0 ? "fn-pos" : "fn-negt"}">${x >= 0 ? "+" : ""}${x.toFixed(1)}%</span>`;
-    const link = (txt, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(txt)}</a>` : esc(txt);
+    const link = (txt, url, h) => aLink(txt, url, h);
     const clean = t => String(t || "").replace(/\s*\(TEST\)$/, "");
 
     // 1) Why the sector leans this way — plain English, strongest first.
     const verb = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "is mixed";
     const whyList = (r.reasons || []).slice(0, 4).map(x => `<li class="fn-why-${x.dir}">
         <b>${x.dir === "up" ? "▲" : "▼"} ${esc(x.label)}</b> → ${esc(x.why)}
-        ${x.headline ? `<span class="fn-why-src">${link("“" + clean(x.headline) + "”", x.url)}</span>` : ""}</li>`).join("");
+        ${x.headline ? `<span class="fn-why-src">${link("“" + clean(x.headline) + "”", x.url, x.headline)}</span>` : ""}</li>`).join("");
     const whyHtml = whyList
       ? `<div class="fn-why"><div class="fn-stk-label">Why ${esc(r.sector)} ${verb}</div><ul>${whyList}</ul></div>`
       : `<div class="fn-muted fn-stk-note">No clear reason in the news yet.</div>`;
@@ -788,7 +797,7 @@
     // 2) Which stocks, each with its own one-line reason.
     const row = s => `<div class="fn-stk fn-stk-${s.score > 0 ? "up" : "down"}">
         <span class="fn-stk-head"><b>${esc(s.sym)}</b> ${pct(s.dayPct)}</span>
-        <span class="fn-stk-why">${s.driver && s.driver.url && s.why.includes("news:") ? link(s.why, s.driver.url) : esc(s.why)}</span></div>`;
+        <span class="fn-stk-why">${s.driver && s.why.includes("news:") ? link(s.why, s.driver.url, s.driver.headline) : esc(s.why)}</span></div>`;
     const groups = r.direction === "down"
       ? [["down", "🔴▼ Stocks that may go down", leans.down], ["up", "🟢▲ Stocks that may go up", leans.up]]
       : [["up", "🟢▲ Stocks that may go up", leans.up], ["down", "🔴▼ Stocks that may go down", leans.down]];
