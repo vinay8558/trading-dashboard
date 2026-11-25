@@ -13,7 +13,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%82%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="flash_news.js?v=202611250017"></script>
+<script src="flash_news.js?v=2026-11-25.3"></script>
 <style>
 :root {
   --bg: #0b0f1a;
@@ -1796,6 +1796,28 @@ function resetToken(){
   if(!confirm("Disconnect and go back to setup?"))return;
   clearToken();showSetup();
 }
+
+/* ── Auto-update: every open device picks up a new version by itself ──
+   BUILD must match version.json (and the ?v= on flash_news.js). On each deploy bump all three.
+   Every 2 minutes (and when the tab comes back) we fetch version.json bypassing all caches;
+   if it differs we reload to a URL with ?v=<new> so the CDN can't hand back the old page. */
+const BUILD = "2026-11-25.3";
+async function checkForNewVersion(){
+  try{
+    const r = await fetch("version.json?t="+Date.now(), {cache:"no-store"});
+    if(!r.ok) return;
+    const v = (await r.json()).v;
+    if(!v || v===BUILD) return;
+    const tries = +(sessionStorage.getItem("bull_upd_"+v)||0);   // never loop if the CDN is still stale
+    if(tries>=2) return;
+    sessionStorage.setItem("bull_upd_"+v, tries+1);
+    const p = new URLSearchParams(location.search); p.set("v", v);
+    location.replace(location.pathname+"?"+p.toString()+location.hash);
+  }catch{}
+}
+setInterval(checkForNewVersion, 120000);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) checkForNewVersion(); });
+checkForNewVersion();
 
 /* ── Init ── */
 if(getToken()) showDashboard(); else showSetup();

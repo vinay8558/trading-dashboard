@@ -128,6 +128,9 @@
     stockDayPct: 2,               // a stock up/down >= 2% today adds +1/-1 to its lean
     stockQuoteCacheSeconds: 120,  // tapped-sector quotes are reused for 2 minutes
     keyStorage: "bull_finnhub_key_v1",
+    alpacaStorage: "bull_alpaca_news_v1",   // {key, secret} — Alpaca data keys, this browser only
+    alpacaPollSeconds: 10,                  // price snapshots (+ news if the live stream is down)
+    lateAfterSeconds: 120,                  // flag items the feed delivered this long after publishing
     muteStorage: "bull_flash_muted_v1",
     apiBase: "https://finnhub.io/api/v1",
   }, global.FLASH_NEWS_CONFIG || {});
@@ -505,7 +508,93 @@
     source: raw.source || "",
     datetime: (raw.datetime || 0) * 1000,
     related: String(raw.related || fallbackSym || "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean),
+    receivedAt: Date.now(),
+    feed: "Finnhub",
   });
+
+  // ── Alpaca (preferred): live news stream (Benzinga newswire) + one-call price snapshots ──
+  // Keys are the user's own Alpaca key ID + secret, pasted once, kept only in this browser.
+  const ALPACA_DATA = "https://data.alpaca.markets";
+  const ALPACA_STREAM = "wss://stream.data.alpaca.markets/v1beta1/news";
+  function getAlpaca() {
+    try { const v = JSON.parse(localStorage.getItem(CONFIG.alpacaStorage) || "null"); return v && v.key && v.secret ? v : null; } catch { return null; }
+  }
+  function setAlpaca(v) { try { v ? localStorage.setItem(CONFIG.alpacaStorage, JSON.stringify(v)) : localStorage.removeItem(CONFIG.alpacaStorage); } catch {} }
+  const hasSource = () => !!(getAlpaca() || getKey());
+
+  let alpacaBackoffUntil = 0;
+  async function alpaca(path, params) {
+    const k = getAlpaca();
+    if (!k) throw new Error("no Alpaca keys");
+    if (Date.now() < alpacaBackoffUntil) throw new Error("Alpaca rate limit, pausing");
+    const q = new URLSearchParams(params || {});
+    const r = await fetch(`${ALPACA_DATA}${path}?${q}`, { cache: "no-store", headers: { "APCA-API-KEY-ID": k.key, "APCA-API-SECRET-KEY": k.secret } });
+    if (r.status === 429) { alpacaBackoffUntil = Date.now() + 30000; throw new Error("Alpaca rate limit, pausing 30s"); }
+    if (r.status === 401 || r.status === 403) throw new Error("Alpaca keys rejected");
+    if (!r.ok) throw new Error(`Alpaca error ${r.status}`);
+    return r.json();
+  }
+
+  const normalizeAlpaca = n => ({
+    headline: n.headline,
+    url: /^https?:\/\//i.test(n.url || "") ? n.url : "",
+    source: n.source ? n.source.charAt(0).toUpperCase() + n.source.slice(1) : "Benzinga",
+    datetime: Date.parse(n.created_at) || 0,          // exact publish time, to the second
+    related: (n.symbols || []).map(s => String(s).toUpperCase()),
+    receivedAt: Date.now(),
+    feed: "Alpaca",
+  });
+
+  async function alpacaNews(params) {
+    const d = await alpaca("/v1beta1/news", Object.assign({ limit: 50, sort: "desc", include_content: "false" }, params));
+    return ((d && d.news) || []).map(normalizeAlpaca).filter(it => it.headline && it.datetime);
+  }
+
+  // One request for many symbols: latest trade price + % change vs yesterday's close.
+  async function alpacaSnapshots(symbols) {
+    const out = {};
+    if (!symbols.length) return out;
+    const d = await alpaca("/v2/stocks/snapshots", { symbols: symbols.join(","), feed: "iex" });
+    for (const [sym, s] of Object.entries(d || {})) {
+      const last = (s && s.latestTrade && s.latestTrade.p) || (s && s.dailyBar && s.dailyBar.c);
+      const prev = s && s.prevDailyBar && s.prevDailyBar.c;
+      if (last > 0) out[sym] = { price: last, dp: prev > 0 ? (last / prev - 1) * 100 : null, t: Date.parse((s.latestTrade || {}).t) || Date.now() };
+    }
+    return out;
+  }
+
+  // Live stream: news is pushed the moment it's published. Falls back to fast REST polling
+  // if the stream can't connect (e.g. another device already holds the one free connection).
+  let ws = null, wsRetryMs = 2000, wsTimer = null;
+  function connectStream() {
+    const k = getAlpaca();
+    if (!k || ws || typeof WebSocket === "undefined") return;
+    try { ws = new WebSocket(ALPACA_STREAM); } catch { ws = null; return; }
+    ws.onopen = () => ws.send(JSON.stringify({ action: "auth", key: k.key, secret: k.secret }));
+    ws.onmessage = ev => {
+      let msgs; try { msgs = JSON.parse(ev.data); } catch { return; }
+      let gotNews = false;
+      for (const m of [].concat(msgs)) {
+        if (m.T === "success" && m.msg === "authenticated") ws.send(JSON.stringify({ action: "subscribe", news: ["*"] }));
+        else if (m.T === "subscription") { state.live = true; wsRetryMs = 2000; state.streamNote = ""; render(); }
+        else if (m.T === "error") {
+          state.live = false;
+          state.streamNote = m.code === 406 ? "live stream busy on another device — polling every 10s"
+                          : m.code === 402 || m.code === 401 ? "Alpaca keys rejected for the news stream" : `stream error ${m.code || ""} ${m.msg || ""}`.trim();
+          render();
+        }
+        else if (m.T === "n" && m.headline) { const it = normalizeAlpaca(m); pool.set(keyOf(it), it); gotNews = true; }
+      }
+      if (gotNews) recompute(false);
+    };
+    ws.onclose = () => {
+      ws = null; state.live = false; render();
+      clearTimeout(wsTimer);
+      if (getAlpaca()) { wsTimer = setTimeout(connectStream, wsRetryMs); wsRetryMs = Math.min(wsRetryMs * 2, 60000); }
+    };
+    ws.onerror = () => { try { ws && ws.close(); } catch {} };
+  }
+  function disconnectStream() { clearTimeout(wsTimer); if (ws) { const w = ws; ws = null; w.onclose = null; try { w.close(); } catch {} } state.live = false; }
 
   // ── Panel state ────────────────────────────────────────────────────────
   const pool = new Map();          // key -> news item (last maxAge minutes)
@@ -533,7 +622,34 @@
     return [...new Set([...list, ...focus].map(s => String(s).toUpperCase()).filter(s => /^[A-Z]{1,5}$/.test(s)))].slice(0, CONFIG.maxSymbols);
   }
 
+  // Alpaca path: 1 snapshot call for every price (+1 news call when the live stream isn't up).
+  async function pollAlpaca() {
+    const syms = watchSymbols();
+    const etfs = Object.values(CONFIG.sectors).map(s => s.etf);
+    const errors = [];
+    connectStream();
+    if (!state.live || firstCycle) {
+      try { (await alpacaNews(firstCycle ? { start: new Date(Date.now() - CONFIG.sectorWindowMinutes * 60000).toISOString() } : {}))
+              .forEach(it => { if (!pool.has(keyOf(it))) { it.backfill = firstCycle; pool.set(keyOf(it), it); } }); }
+      catch (e) { errors.push(e.message); }
+    }
+    try {
+      const snap = await alpacaSnapshots([...syms, ...etfs]);
+      const t = Date.now();
+      for (const [sym, s] of Object.entries(snap)) {
+        recordPrice(sym, s.price, t);
+        if (s.dp !== null) { if (etfs.includes(sym)) etfDay[sym] = s.dp; else { stockDay[sym] = s.dp; stockDayAt[sym] = t; } }
+      }
+    } catch (e) { errors.push(e.message); }
+    return { errors, total: 2 };
+  }
+
   async function pollOnce() {
+    if (getAlpaca()) {
+      const { errors, total } = await pollAlpaca();
+      finishPoll(errors, total);
+      return;
+    }
     const now = Date.now();
     const syms = watchSymbols();
     const errors = [];
@@ -541,7 +657,7 @@
     const from = ymd(new Date(now - 86400000)), to = ymd(new Date(now));
 
     try {
-      (await api("/news", { category: "general" }) || []).forEach(n => { const it = normalize(n); pool.set(keyOf(it), it); });
+      (await api("/news", { category: "general" }) || []).forEach(n => { const it = normalize(n); if (!pool.has(keyOf(it))) { it.backfill = firstCycle; pool.set(keyOf(it), it); } });
     } catch (e) { errors.push(e.message); }
 
     // Company news: a few symbols per cycle, rotating, so we stay under rate limits.
@@ -550,7 +666,7 @@
     rotate = syms.length ? (rotate + batch.length) % syms.length : 0;
     for (const s of batch) {
       await sleep(CONFIG.staggerMs);
-      try { (await api("/company-news", { symbol: s, from, to }) || []).forEach(n => { const it = normalize(n, s); pool.set(keyOf(it), it); }); }
+      try { (await api("/company-news", { symbol: s, from, to }) || []).forEach(n => { const it = normalize(n, s); if (!pool.has(keyOf(it))) { it.backfill = firstCycle; pool.set(keyOf(it), it); } }); }
       catch (e) { errors.push(e.message); }
     }
 
@@ -573,11 +689,14 @@
       catch (err) { errors.push(err.message); }
     }
 
+    finishPoll(errors, 1 + batch.length + syms.length + etfs.length);
+  }
+
+  function finishPoll(errors, total) {
     // Drop stale pool entries (kept long enough for the 3-hour sector view).
     const cutoff = Date.now() - Math.max(CONFIG.maxAgeMinutes, CONFIG.sectorWindowMinutes) * 60000;
     for (const [k, it] of pool) if (it.datetime < cutoff) pool.delete(k);
-
-    const allErr = errors.length && errors.length >= 1 + batch.length + syms.length + etfs.length;
+    const allErr = errors.length && errors.length >= total;
     state.error = allErr ? errors[0] : (errors.length ? `${errors.length} request(s) failed — ${errors[0]}` : null);
     if (!allErr) state.updated = new Date();
     recompute(true);
@@ -623,34 +742,69 @@
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────
-  const fmtTime = d => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const fmtClock = d => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  // All times in US market time (ET), to the second — "each second matters".
+  const ET = { timeZone: "America/New_York" };
+  const fmtET = (t, withDate) => {
+    const d = new Date(t);
+    const time = d.toLocaleTimeString("en-US", Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, ET));
+    if (!withDate) return time + " ET";
+    const sameDay = d.toLocaleDateString("en-US", ET) === new Date().toLocaleDateString("en-US", ET);
+    return (sameDay ? "" : d.toLocaleDateString("en-US", Object.assign({ month: "short", day: "numeric" }, ET)) + " ") + time + " ET";
+  };
+  const fmtClock = d => fmtET(d);
+  function ageText(t) {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60), rs = s % 60;
+    if (m < 60) return `${m}m ${String(rs).padStart(2, "0")}s ago`;
+    const h = Math.floor(m / 60);
+    return h < 48 ? `${h}h ${m % 60}m ago` : `${Math.floor(h / 24)}d ago`;
+  }
+  // Exact publish time + a live ticking age; flags items the feed delivered late.
+  function timeTag(it) {
+    // Only items that arrived after the page loaded can be "late" — the first batch is just history.
+    const late = !it.backfill && !it.mock && it.receivedAt && it.datetime && (it.receivedAt - it.datetime) / 1000 > CONFIG.lateAfterSeconds;
+    return `<span class="fn-time" title="Published ${esc(fmtET(it.datetime, true))}${it.receivedAt ? " · received " + esc(fmtET(it.receivedAt)) : ""}${it.feed ? " · via " + esc(it.feed) : ""}">${esc(fmtET(it.datetime, true))}
+      <span class="fn-age" data-ts="${it.datetime}">${ageText(it.datetime)}</span>${late ? `<span class="fn-late" title="The news feed delivered this ${Math.round((it.receivedAt - it.datetime) / 1000)} seconds after it was published">arrived ${Math.round((it.receivedAt - it.datetime) / 60000)}m late</span>` : ""}</span>`;
+  }
 
   function render(newKeys) {
     if (!root) return;
     newKeys = new Set(newKeys || []);
-    const hasKey = !!getKey();
+    const hasKey = hasSource();
     const muted = isMuted();
     const perm = ("Notification" in global) ? Notification.permission : "unsupported";
+    const usingAlpaca = !!getAlpaca();
 
     let status;
     if (!hasKey && !mockItems.length) status = `<span class="fn-muted">Not connected</span>`;
     else if (state.error) status = `<span class="fn-err" title="${esc(state.error)}">⚠ ${esc(state.error.length > 40 ? state.error.slice(0, 40) + "…" : state.error)}</span>`;
-    else status = state.updated ? `<span class="fn-muted">Last updated ${fmtClock(state.updated)}</span>` : `<span class="fn-muted">Loading…</span>`;
+    else {
+      const mode = usingAlpaca
+        ? (state.live ? `<span class="fn-live" title="News is pushed from Alpaca the moment it's published">● LIVE</span> ` : `<span class="fn-muted" title="${esc(state.streamNote || "Connecting to the live stream…")}">◌ polling ${CONFIG.alpacaPollSeconds}s</span> `)
+        : `<span class="fn-muted" title="Finnhub free feed, polled every ${CONFIG.pollSeconds}s">◌ polling ${CONFIG.pollSeconds}s</span> `;
+      status = mode + (state.updated ? `<span class="fn-muted" title="Last updated">⟳ ${fmtClock(state.updated)}</span>` : `<span class="fn-muted">loading…</span>`);
+    }
 
     let body;
-    if (!hasKey && !mockItems.length) {
+    if (state.showSetup || (!hasKey && !mockItems.length)) {
+      const a = getAlpaca();
       body = `<div class="fn-setup">
-        <div class="fn-muted">Add a free <a href="https://finnhub.io/register" target="_blank" rel="noopener">Finnhub API key</a> to turn on flash news. It's stored only in this browser.</div>
-        <div class="fn-row"><input type="password" class="fn-input" placeholder="Finnhub API key" autocomplete="off" spellcheck="false">
-        <button class="fn-btn fn-save">Save</button></div></div>`;
+        <div class="fn-muted"><b>Recommended: Alpaca</b> — real-time news (Benzinga newswire, pushed live) and live prices. Use the same API key ID + secret as your Alpaca paper account. Stored only in this browser.</div>
+        <div class="fn-row"><input type="text" class="fn-input fn-ak" placeholder="Alpaca API key ID" autocomplete="off" spellcheck="false" value="${a ? esc(a.key) : ""}">
+        <input type="password" class="fn-input fn-as" placeholder="Alpaca secret key" autocomplete="off" spellcheck="false"></div>
+        <div class="fn-row"><button class="fn-btn fn-save-alpaca">Save Alpaca keys</button>${a ? `<button class="fn-icon fn-del-alpaca">Remove</button>` : ""}</div>
+        <div class="fn-muted" style="margin-top:8px">Backup (optional): free <a href="https://finnhub.io/register" target="_blank" rel="noopener">Finnhub key</a> — slower news, but also lets search find stocks by company name.</div>
+        <div class="fn-row"><input type="password" class="fn-input fn-fk" placeholder="${getKey() ? "Finnhub key saved — paste to replace" : "Finnhub API key"}" autocomplete="off" spellcheck="false">
+        <button class="fn-btn fn-save">Save</button>${getKey() ? `<button class="fn-icon fn-del-finnhub">Remove</button>` : ""}</div>
+        ${hasKey ? `<div class="fn-row"><button class="fn-icon fn-close-setup">Done</button></div>` : ""}</div>`;
     } else if (!state.items.length) {
       body = `<div class="fn-empty">No major news in the last ${CONFIG.maxAgeMinutes} min.</div>`;
     } else {
       body = `<div class="fn-list">${state.items.map(it => `
         <div class="fn-item fn-${it.sentiment} ${newKeys.has(it.key) ? "fn-new" : ""}">
           <span class="fn-dir" title="${it.sentiment === "bull" ? "Bullish news" : it.sentiment === "bear" ? "Bearish news" : "Neutral / unclear"}">${it.sentiment === "bull" ? "🟢▲" : it.sentiment === "bear" ? "🔴▼" : "⚪"}</span>
-          <span class="fn-time">${fmtTime(new Date(it.datetime))}</span>
+          ${timeTag(it)}
           <span class="fn-badge fn-${it.impact === "HIGH" ? "high" : "med"}">${it.impact}</span>
           ${(it.symbols.length ? it.symbols : ["MKT"]).slice(0, 2).map(s => `<span class="fn-sym">${esc(s)}</span>`).join("")}
           <span class="fn-head">${aLink(it.headline, it.url, it.headline)}
@@ -667,9 +821,10 @@
         <span class="fn-title">⚡ Flash News${state.items.length ? ` <span class="fn-count">${state.items.length}</span>` : ""}</span>
         <span class="fn-status">${status}</span>
         <span class="fn-actions">
+          ${hasKey ? `<button class="fn-icon fn-refresh ${polling ? "fn-spin" : ""}" title="Refresh news and prices now">↻</button>` : ""}
           ${perm === "default" ? `<button class="fn-icon fn-notify" title="Allow notifications when this tab is in the background">🔔</button>` : ""}
           <button class="fn-icon fn-mute" title="${muted ? "Unmute" : "Mute"} alert sound">${muted ? "🔇" : "🔊"}</button>
-          ${hasKey ? `<button class="fn-icon fn-key" title="Change or remove the Finnhub key">⚙</button>` : ""}
+          ${hasKey ? `<button class="fn-icon fn-key" title="News source keys (Alpaca / Finnhub)">⚙</button>` : ""}
         </span>
       </div>${renderSearch(hasKey)}${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
 
@@ -694,18 +849,18 @@
       const icon = r.direction === "up" ? "🟢▲" : r.direction === "down" ? "🔴▼" : "⚪";
       const verdict = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "no clear direction";
       const link = (t, u, h) => aLink(t, u, h);
-      const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+      const when = t => `${esc(fmtET(t, true))} · <span class="fn-age" data-ts="${t}">${ageText(t)}</span>`;
       out = `<div class="fn-result fn-sec-${r.direction}">
         <div class="fn-res-head">${icon} <b>${esc(r.sym)}</b>${s.name && s.name.toUpperCase() !== r.sym ? ` <span class="fn-muted">${esc(s.name)}</span>` : ""}
           <span class="fn-res-verdict fn-${r.direction}-lbl">${verdict}</span>
           ${r.dayPct !== null ? `<span class="${r.dayPct >= 0 ? "fn-pos" : "fn-negt"}">${r.dayPct >= 0 ? "+" : ""}${r.dayPct.toFixed(2)}% today</span>` : ""}
-          <span class="fn-muted">· confidence ${r.confidence}${r.sector ? ` · ${esc(r.sector)}` : ""}</span>
+          <span class="fn-muted">· confidence ${r.confidence}${r.sector ? ` · ${esc(r.sector)}` : ""}${s.at ? ` · checked ${esc(fmtET(s.at))}` : ""}</span>
           <button class="fn-icon fn-res-close" title="Close">✕</button></div>
         ${r.reasons.length ? `<ul class="fn-res-why">${r.reasons.slice(0, 5).map(x =>
           `<li class="fn-why-${x.dir}"><b>${x.dir === "up" ? "▲" : "▼"}</b> ${link(x.text, x.url, x.headline)}</li>`).join("")}</ul>`
           : `<div class="fn-muted fn-stk-note">No news about ${esc(r.sym)} in the last 3 days and no big price move — nothing to lean on.</div>`}
         ${r.headlines.length ? `<div class="fn-stk-label" style="margin-top:6px">Latest headlines</div>${r.headlines.map(h =>
-          `<div class="fn-res-hl">${h.sentiment === "bull" ? "🟢" : h.sentiment === "bear" ? "🔴" : "⚪"} ${link(h.headline, h.url, h.headline)} <span class="fn-muted">${esc(h.source || "")} · ${ago(h.datetime)}</span></div>`).join("")}` : ""}
+          `<div class="fn-res-hl">${h.sentiment === "bull" ? "🟢" : h.sentiment === "bear" ? "🔴" : "⚪"} ${link(h.headline, h.url, h.headline)} <span class="fn-muted">${esc(h.source || "")} · ${when(h.datetime)}</span></div>`).join("")}` : ""}
         <div class="fn-muted fn-stk-note">A quick read of recent news and price, not a prediction or a buy/sell call.</div>
       </div>`;
     }
@@ -723,8 +878,8 @@
     for (const [sym, n] of Object.entries(CONFIG.companyNames))
       if (n.split("|").some(x => x.toLowerCase() === t.toLowerCase() || (t.length >= 4 && x.toLowerCase().startsWith(t.toLowerCase())))) return { sym, name: n.split("|")[0] };
     if (!getKey()) {
-      if (/^[A-Z]{1,5}$/.test(up)) return { sym: up, name: "" };
-      throw new Error("Add your Finnhub key to search any company");
+      if (/^[A-Za-z]{1,5}$/.test(t)) return { sym: up, name: "" };
+      throw new Error("Type the ticker (e.g. TSLA) — or add a Finnhub key in ⚙ to search by company name");
     }
     const res = await api("/search", { q: t });
     const list = (res && res.result) || [];
@@ -744,14 +899,19 @@
       const now = Date.now();
       const ymd = d => d.toISOString().slice(0, 10);
       let own = [], dp = (stockDay[sym] !== undefined ? stockDay[sym] : mockDay[sym]);
-      if (getKey()) {
+      if (getAlpaca()) {
+        // Alpaca: 3 days of this stock's news + its live price, 2 calls total.
+        try { own = await alpacaNews({ symbols: sym, start: new Date(now - 3 * 86400000).toISOString() }); }
+        catch (e) { if (!pool.size) throw e; }
+        try { const s = (await alpacaSnapshots([sym]))[sym]; if (s && s.dp !== null) { dp = s.dp; stockDay[sym] = dp; stockDayAt[sym] = Date.now(); } } catch {}
+      } else if (getKey()) {
         try {
           own = ((await api("/company-news", { symbol: sym, from: ymd(new Date(now - 3 * 86400000)), to: ymd(new Date(now)) })) || []).map(n => normalize(n, sym));
         } catch (e) { if (!pool.size) throw e; }
         try { const qd = await api("/quote", { symbol: sym }); if (qd && typeof qd.dp === "number" && qd.c > 0) { dp = qd.dp; stockDay[sym] = dp; stockDayAt[sym] = Date.now(); } } catch {}
       }
       const result = analyzeSymbol(sym, [...own, ...pool.values(), ...mockItems], dp, priceMoves(now)[sym] ?? mockMoves[sym], state.sectors, now);
-      state.search = { query: sym, name, result };
+      state.search = { query: sym, name, result, at: Date.now() };
     } catch (e) {
       state.search = { query: q, error: e.message || "Search failed" };
     }
@@ -812,11 +972,18 @@
   // Tapping a sector: open it and fetch today's % move for its stocks (cached 2 min, staggered).
   async function loadSectorQuotes(sector) {
     const sec = CONFIG.sectors[sector];
-    if (!sec || !getKey()) return;
+    if (!sec || !hasSource()) return;
     const stale = s => !stockDayAt[s] || Date.now() - stockDayAt[s] > CONFIG.stockQuoteCacheSeconds * 1000;
     const need = sec.symbols.filter(stale);
     if (!need.length) return;
     state.loadingSector = sector; render();
+    if (getAlpaca()) {
+      // One snapshot call covers the whole sector.
+      try { const snap = await alpacaSnapshots(need); for (const [s, v] of Object.entries(snap)) if (v.dp !== null) { stockDay[s] = v.dp; stockDayAt[s] = Date.now(); } } catch {}
+      if (state.loadingSector === sector) state.loadingSector = null;
+      render();
+      return;
+    }
     for (const s of need) {
       if (state.expanded !== sector) break;          // user closed it — stop spending calls
       try { const q = await api("/quote", { symbol: s }); if (q && typeof q.dp === "number") { stockDay[s] = q.dp; stockDayAt[s] = Date.now(); } }
@@ -846,9 +1013,23 @@
     if (row && !e.target.closest("a")) { toggleSector(row.dataset.sector); return; }
     const t = e.target.closest("button");
     if (!t) return;
-    if (t.classList.contains("fn-save")) {
-      const v = (root.querySelector(".fn-input") || {}).value || "";
-      if (v.trim()) { setKey(v.trim()); state.error = null; render(); safePoll(); }
+    const resetData = () => { disconnectStream(); pool.clear(); shownKeys.clear(); firstCycle = true;
+      state = Object.assign({ items: [], sectors: [], updated: null, error: null }, { search: state.search }); };
+    if (t.classList.contains("fn-refresh")) {
+      refreshNow();
+    } else if (t.classList.contains("fn-save-alpaca")) {
+      const k = ((root.querySelector(".fn-ak") || {}).value || "").trim(), sct = ((root.querySelector(".fn-as") || {}).value || "").trim();
+      if (!k || !sct) { state.error = "Paste both the Alpaca key ID and secret"; render(); return; }
+      setAlpaca({ key: k, secret: sct }); resetData(); state.showSetup = false; restartTimer(); render(); safePoll();
+    } else if (t.classList.contains("fn-del-alpaca")) {
+      setAlpaca(null); resetData(); restartTimer(); render(); safePoll();
+    } else if (t.classList.contains("fn-save")) {
+      const v = ((root.querySelector(".fn-fk") || {}).value || "").trim();
+      if (v) { setKey(v); state.error = null; if (!getAlpaca()) resetData(); state.showSetup = false; restartTimer(); render(); safePoll(); }
+    } else if (t.classList.contains("fn-del-finnhub")) {
+      setKey(""); if (!getAlpaca()) resetData(); restartTimer(); render();
+    } else if (t.classList.contains("fn-close-setup")) {
+      state.showSetup = false; render();
     } else if (t.classList.contains("fn-mute")) {
       setMuted(!isMuted());
       if (!isMuted()) beep(false);          // also unlocks audio for later background alerts
@@ -856,9 +1037,7 @@
     } else if (t.classList.contains("fn-notify")) {
       try { Notification.requestPermission().then(() => render()); } catch {}
     } else if (t.classList.contains("fn-key")) {
-      const v = global.prompt("Finnhub API key (leave empty to remove):", "");
-      if (v === null) return;
-      setKey(v.trim()); state = { items: [], sectors: [], updated: null, error: null }; pool.clear(); render(); if (v.trim()) safePoll();
+      state.showSetup = !state.showSetup; render();
     }
   }
 
@@ -873,11 +1052,18 @@
 .fn-title{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--gold,#eab308)}
 .fn-count{background:var(--card-h,rgba(255,255,255,.07));color:var(--ink2,#94a3b8);font-size:10px;padding:1px 7px;border-radius:99px}
 .fn-status{font-size:11px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fn-muted{color:var(--muted,#64748b)} .fn-err{color:var(--bear,#ef4444)}
+@media (max-width:480px){.fn-status{order:3;flex-basis:100%}.fn-actions{margin-left:auto}}
+.fn-muted{color:var(--muted,#64748b)}
+.fn-live{color:var(--bull,#22c55e);font-weight:800;animation:fnBlink 2s ease-in-out infinite}
+@keyframes fnBlink{50%{opacity:.45}}
+.fn-spin{animation:fnSpin .8s linear infinite} @keyframes fnSpin{to{transform:rotate(360deg)}}
+.fn-refresh{font-size:14px;line-height:1}
+.fn-age{color:var(--ink2,#94a3b8);margin-left:4px;font-weight:600}
+.fn-late{color:var(--orange,#f97316);margin-left:4px;font-size:10px} .fn-err{color:var(--bear,#ef4444)}
 .fn-actions{display:flex;gap:4px}
 .fn-icon{background:none;border:1px solid var(--line,rgba(255,255,255,.07));border-radius:8px;color:var(--ink2,#94a3b8);font-size:13px;padding:2px 7px;cursor:pointer}
-.fn-list{max-height:220px;overflow-y:auto;margin-top:6px}
-.fn-item{display:flex;align-items:baseline;gap:6px;padding:6px 4px;border-top:1px solid var(--line,rgba(255,255,255,.07));font-size:13px;transition:background 1s}
+.fn-list{max-height:300px;overflow-y:auto;margin-top:6px}
+.fn-item{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px;padding:6px 4px;border-top:1px solid var(--line,rgba(255,255,255,.07));font-size:13px;transition:background 1s}
 .fn-item.fn-new{background:rgba(234,179,8,.18);animation:fnPulse 1s ease-in-out 5}
 @keyframes fnPulse{50%{background:rgba(234,179,8,.32)}}
 .fn-item.fn-bull{box-shadow:inset 3px 0 0 var(--bull,#22c55e)} .fn-item.fn-bull .fn-head{color:#bbf7d0}
@@ -923,7 +1109,7 @@
 .fn-high{background:var(--bear-bg,rgba(239,68,68,.12));color:var(--bear,#ef4444)}
 .fn-med{background:rgba(234,179,8,.14);color:var(--gold,#eab308)}
 .fn-sym{font-size:10px;font-weight:800;color:var(--accent,#8b5cf6);background:var(--accent-bg,rgba(139,92,246,.12));padding:1px 5px;border-radius:5px;flex:none}
-.fn-head{min-width:0;color:var(--ink,#f1f5f9)} .fn-head a{color:inherit;text-decoration:none} .fn-head a:hover{text-decoration:underline}
+.fn-head{flex:1 1 100%;min-width:0;padding-left:2px;color:var(--ink,#f1f5f9)} .fn-head a{color:inherit;text-decoration:none} .fn-head a:hover{text-decoration:underline}
 .fn-src{color:var(--muted,#64748b);font-size:11px;margin-left:4px}
 .fn-empty{color:var(--muted,#64748b);font-size:12px;padding:6px 2px 2px}
 .fn-setup{font-size:12px;padding-top:6px} .fn-setup a{color:var(--cyan,#06b6d4)}
@@ -934,13 +1120,36 @@
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
-  let timer = null, polling = false;
+  let timer = null, polling = false, ageTimer = null;
   async function safePoll() {
-    if (polling || !getKey()) return;
+    if (polling || !hasSource()) return;
     polling = true;
     try { await pollOnce(); }
     catch (e) { state.error = e.message || "fetch failed"; render(); }
-    finally { polling = false; }
+    finally {
+      polling = false;
+      const b = root && root.querySelector(".fn-refresh");   // stop the ↻ spin without a full re-render
+      if (b) b.classList.remove("fn-spin");
+    }
+  }
+  const pollEvery = () => (getAlpaca() ? CONFIG.alpacaPollSeconds : CONFIG.pollSeconds) * 1000;
+  function restartTimer() { clearInterval(timer); timer = setInterval(safePoll, pollEvery()); }
+
+  // ↻ button: fetch news + prices right now (and reconnect the live stream if it dropped).
+  async function refreshNow() {
+    if (polling) return;
+    firstCycle = firstCycle || !state.live;      // pull a fresh news batch even if the stream is up
+    if (getAlpaca() && !ws) { wsRetryMs = 2000; connectStream(); }
+    const p = safePoll();
+    render();                                      // show the spinning ↻ immediately
+    await p;
+    restartTimer();                                // next automatic refresh counts from now
+  }
+
+  // Tick every "Xs ago" label once a second without re-rendering the panel.
+  function tickAges() {
+    if (!root) return;
+    root.querySelectorAll(".fn-age").forEach(el => { const t = +el.dataset.ts; if (t) el.textContent = ageText(t); });
   }
 
   function mount(container, opts) {
@@ -954,8 +1163,9 @@
       root.addEventListener("keydown", onKey);
       render();
       safePoll();
-      clearInterval(timer);
-      timer = setInterval(safePoll, CONFIG.pollSeconds * 1000);
+      restartTimer();
+      clearInterval(ageTimer);
+      ageTimer = setInterval(tickAges, 1000);
       if (/[?&]flashtest=1\b/.test(global.location.search)) injectMock();
     } catch (e) { try { console.warn("FlashNews mount failed:", e); } catch {} }
   }
