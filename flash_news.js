@@ -326,7 +326,7 @@
       const cut = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
       let why;
       if (driver && score !== 0 && (driver.sentiment === "bull") === (score > 0))
-        why = `${driver.sentiment === "bull" ? "Good" : "Bad"} news: “${cut(String(driver.headline).replace(/\s*\(TEST\)$/, ""), 80)}”`;
+        why = `${driver.sentiment === "bull" ? "Good" : "Bad"} news: “${cut(String(driver.headline), 80)}”`;
       else if (macroApplied)
         why = `${macroApplied.label} → ${macroApplied.why}`;
       else if (d !== null && Math.abs(d) >= CONFIG.stockDayPct)
@@ -368,7 +368,7 @@
 
     let score = 0;
     const reasons = [];
-    const clean = t => String(t).replace(/\s*\(TEST\)$/, "");
+    const clean = t => String(t);   // keep "(TEST)" visible on made-up items
     const cut = (t, n) => t.length > n ? t.slice(0, n - 1) + "…" : t;
     for (const it of about) {
       const sent = sentimentOf(it.headline, 0);
@@ -826,7 +826,7 @@
           <button class="fn-icon fn-mute" title="${muted ? "Unmute" : "Mute"} alert sound">${muted ? "🔇" : "🔊"}</button>
           ${hasKey ? `<button class="fn-icon fn-key" title="News source keys (Alpaca / Finnhub)">⚙</button>` : ""}
         </span>
-      </div>${renderSearch(hasKey)}${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
+      </div>${testBanner()}${renderSearch(hasKey)}${body}${renderSectors(hasKey)}${(state.items.length || (state.sectors || []).length) && (hasKey || mockItems.length) ? `<div class="fn-legend">🟢▲ bullish · 🔴▼ bearish · ⚪ mixed — quick read of the news, not buy/sell orders</div>` : ""}</div>`;
 
     const q1 = root.querySelector(".fn-q");
     if (q1 && typing) {
@@ -835,6 +835,15 @@
     }
 
     if (newKeys.size) setTimeout(() => root && root.querySelectorAll(".fn-new").forEach(el => el.classList.remove("fn-new")), CONFIG.highlightSeconds * 1000);
+  }
+
+  // Test mode (?flashtest=1 or injectMock): make it impossible to mistake made-up items for real news.
+  function testBanner() {
+    if (!mockItems.length) return "";
+    const p = new URLSearchParams(global.location.search); p.delete("flashtest");
+    const exit = global.location.pathname + (p.toString() ? "?" + p : "");
+    return `<div class="fn-testbar">🧪 <b>TEST DATA</b> — made-up headlines and prices to preview the layout. <b>Not real news.</b>
+      <a href="${esc(exit)}">Exit test mode</a></div>`;
   }
 
   // ── Search: ticker or company → "may go up / down" with reasons ───────
@@ -943,7 +952,7 @@
                              Object.assign(priceMoves(Date.now()), mockMoves), Date.now(), watchSymbols(), r);
     const pct = x => x === null ? "" : `<span class="${x >= 0 ? "fn-pos" : "fn-negt"}">${x >= 0 ? "+" : ""}${x.toFixed(1)}%</span>`;
     const link = (txt, url, h) => aLink(txt, url, h);
-    const clean = t => String(t || "").replace(/\s*\(TEST\)$/, "");
+    const clean = t => String(t || "");   // keep "(TEST)" visible on made-up items
 
     // 1) Why the sector leans this way — plain English, strongest first.
     const verb = r.direction === "up" ? "may go up" : r.direction === "down" ? "may go down" : "is mixed";
@@ -1054,6 +1063,8 @@
 .fn-status{font-size:11px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:480px){.fn-status{order:3;flex-basis:100%}.fn-actions{margin-left:auto}}
 .fn-muted{color:var(--muted,#64748b)}
+.fn-testbar{margin-top:8px;padding:7px 10px;border-radius:8px;font-size:12px;background:rgba(234,179,8,.15);border:1px dashed var(--gold,#eab308);color:var(--gold,#eab308)}
+.fn-testbar a{color:var(--ink,#f1f5f9);margin-left:6px;font-weight:700}
 .fn-live{color:var(--bull,#22c55e);font-weight:800;animation:fnBlink 2s ease-in-out infinite}
 @keyframes fnBlink{50%{opacity:.45}}
 .fn-spin{animation:fnSpin .8s linear infinite} @keyframes fnSpin{to{transform:rotate(360deg)}}
