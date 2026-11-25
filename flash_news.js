@@ -958,25 +958,25 @@
     const now = Date.now();
     mockMoves = { [sym]: 2.6 };   // pretend it jumped 2.6% in 5 min
     mockItems = [
-      { headline: `${sym} beats earnings, raises full-year guidance (TEST)`, url: "https://example.com/flash-test-high",
+      { headline: `${sym} beats earnings, raises full-year guidance (TEST)`,
         source: "Mock Wire", datetime: now - 60000, related: [sym], mock: true },          // 2+2+2+1 = 7 → HIGH
-      { headline: "Fed warns of rate hike at next rate decision as CPI runs hot (TEST)", url: "https://example.com/flash-test-med",
+      { headline: "Fed warns of rate hike at next rate decision as CPI runs hot (TEST)",
         source: "Mock Wire", datetime: now - 120000, related: [], mock: true },             // 2+1 = 3 → MEDIUM, bearish
       // Sector-outlook test data: Tech leans down, Health & Biotech and Energy lean up, Financials mixed.
-      { headline: "Microsoft downgraded on slowing cloud growth (TEST)", url: "https://example.com/t1", source: "Mock Wire", datetime: now - 30 * 60000, related: ["MSFT"], mock: true },
-      { headline: "Chip stocks fall on new export curbs (TEST)", url: "https://example.com/t2", source: "Mock Wire", datetime: now - 50 * 60000, related: [], mock: true },
-      { headline: "FDA approves Lilly obesity drug (TEST)", url: "https://example.com/h1", source: "Mock Wire", datetime: now - 20 * 60000, related: ["LLY"], mock: true },
-      { headline: "Biotech stocks surge after strong trial results (TEST)", url: "https://example.com/h2", source: "Mock Wire", datetime: now - 70 * 60000, related: [], mock: true },
-      { headline: "Oil jumps as OPEC extends output limits (TEST)", url: "https://example.com/e1", source: "Mock Wire", datetime: now - 40 * 60000, related: [], mock: true },
-      { headline: "Exxon raises production target (TEST)", url: "https://example.com/e2", source: "Mock Wire", datetime: now - 90 * 60000, related: ["XOM"], mock: true },
+      { headline: "Microsoft downgraded on slowing cloud growth (TEST)", source: "Mock Wire", datetime: now - 30 * 60000, related: ["MSFT"], mock: true },
+      { headline: "Chip stocks fall on new export curbs (TEST)", source: "Mock Wire", datetime: now - 50 * 60000, related: [], mock: true },
+      { headline: "FDA approves Lilly obesity drug (TEST)", source: "Mock Wire", datetime: now - 20 * 60000, related: ["LLY"], mock: true },
+      { headline: "Biotech stocks surge after strong trial results (TEST)", source: "Mock Wire", datetime: now - 70 * 60000, related: [], mock: true },
+      { headline: "Oil jumps as OPEC extends output limits (TEST)", source: "Mock Wire", datetime: now - 40 * 60000, related: [], mock: true },
+      { headline: "Exxon raises production target (TEST)", source: "Mock Wire", datetime: now - 90 * 60000, related: ["XOM"], mock: true },
     ];
     mockEtf = { XLK: -1.4, XLV: 1.1, XLE: 1.6, XLF: 0.2 };
     // Per-stock test data for the tap-to-expand view (today's % move).
     mockDay = { NVDA: 2.4, SNDK: 3.1, AAOI: 1.8, AMD: 2.2, MSFT: -1.6, INTC: -2.3, XOM: 1.2, OXY: 2.5, CVX: -0.4, LLY: 3.4, MRNA: 2.6, PFE: -2.1 };
     mockItems.push(
-      { headline: "SanDisk shares surge on record flash memory demand (TEST)", url: "https://example.com/s1", source: "Mock Wire", datetime: now - 35 * 60000, related: ["SNDK"], mock: true },
-      { headline: "Applied Optoelectronics wins hyperscaler order (TEST)", url: "https://example.com/s2", source: "Mock Wire", datetime: now - 55 * 60000, related: ["AAOI"], mock: true },
-      { headline: "Intel falls after weak guidance (TEST)", url: "https://example.com/s3", source: "Mock Wire", datetime: now - 65 * 60000, related: ["INTC"], mock: true });
+      { headline: "SanDisk shares surge on record flash memory demand (TEST)", source: "Mock Wire", datetime: now - 35 * 60000, related: ["SNDK"], mock: true },
+      { headline: "Applied Optoelectronics wins hyperscaler order (TEST)", source: "Mock Wire", datetime: now - 55 * 60000, related: ["AAOI"], mock: true },
+      { headline: "Intel falls after weak guidance (TEST)", source: "Mock Wire", datetime: now - 65 * 60000, related: ["INTC"], mock: true });
     recompute(false);
     return state.items;
   }
